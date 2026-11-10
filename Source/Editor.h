@@ -75,6 +75,8 @@ public:
   g.setColour(Colour(0xff2a2c2e)); g.fillRect(cap.getX() + 2, cap.getCentreY() - .5f, cap.getWidth() - 4, 1.f);
   if (!slider.isEnabled()) { g.setColour(panel.withAlpha(.6f)); g.fillRoundedRectangle(cap.expanded(1), 2); }
  }
+ // Orbit's knob: a dark skirt with a fine bright rim, a raised cap lit from above, and an index line in the
+ // colour of the section the knob belongs to, so the eye finds the setting and the section at once.
  void drawRotarySlider(Graphics& g, int x, int y, int w, int h, float value, float start, float end, Slider& slider) override {
   using namespace orbitui;
   auto area = Rectangle<float>(float(x), float(y), float(w), float(h));
@@ -82,14 +84,22 @@ public:
   const float diameter = jmin(area.getWidth(), area.getHeight()) - (selector ? 6.f : 14.f);
   area = area.withSizeKeepingCentre(diameter, diameter);
   const auto centre = area.getCentre(); const float angle = start + value * (end - start), outer = diameter * .5f;
+  const auto accent = slider.findColour(Slider::rotarySliderFillColourId);
+  const auto point = [centre, angle](float radius) { return Point<float>(centre.x + std::sin(angle) * radius, centre.y - std::cos(angle) * radius); };
   g.setColour(dim);
-  if (!selector) for (int i = 0; i <= 10; ++i) { const float a = start + (end - start) * float(i) / 10.f; g.drawLine(centre.x + std::sin(a) * (outer + 2), centre.y - std::cos(a) * (outer + 2), centre.x + std::sin(a) * (outer + 5), centre.y - std::cos(a) * (outer + 5), 1.f); }
-  g.setColour(Colours::black.withAlpha(.45f)); g.fillEllipse(area.translated(0, 3));
-  g.setColour(Colour(0xff101112)); g.fillEllipse(area);
-  const auto dial = area.reduced(3);
-  g.setGradientFill(ColourGradient(Colour(0xff5a5d60), dial.getX() + dial.getWidth() * .3f, dial.getY() + dial.getHeight() * .25f, Colour(0xff17181a), dial.getRight(), dial.getBottom(), true)); g.fillEllipse(dial);
-  const float radius = dial.getWidth() * .5f;
-  g.setColour(ink); g.drawLine(centre.x + std::sin(angle) * radius * .35f, centre.y - std::cos(angle) * radius * .35f, centre.x + std::sin(angle) * (radius - 2), centre.y - std::cos(angle) * (radius - 2), 2.f);
+  if (!selector) for (int i = 0; i <= 10; ++i) { const float a = start + (end - start) * float(i) / 10.f; g.drawLine(centre.x + std::sin(a) * (outer + 2), centre.y - std::cos(a) * (outer + 2), centre.x + std::sin(a) * (outer + (i % 5 == 0 ? 6.f : 4.f)), centre.y - std::cos(a) * (outer + (i % 5 == 0 ? 6.f : 4.f)), 1.f); }
+  g.setColour(Colours::black.withAlpha(.5f)); g.fillEllipse(area.translated(0, diameter * .09f).expanded(1));          // shadow on the panel
+  g.setGradientFill(ColourGradient(Colour(0xff2b2d30), 0, area.getY(), Colour(0xff0c0d0e), 0, area.getBottom(), false)); g.fillEllipse(area); // skirt
+  g.setColour(Colour(0xff6a6e72).withAlpha(.7f)); g.drawEllipse(area.reduced(.5f), 1.f);                                 // bright rim
+  const auto cap = area.reduced(diameter * .16f);
+  g.setColour(Colours::black.withAlpha(.55f)); g.fillEllipse(cap.translated(0, diameter * .05f));                        // the cap stands proud of the skirt
+  g.setGradientFill(ColourGradient(Colour(0xff64686c), 0, cap.getY(), Colour(0xff1d1f21), 0, cap.getBottom(), false)); g.fillEllipse(cap);
+  g.setColour(Colours::white.withAlpha(.22f)); g.drawEllipse(cap.reduced(1.f), 1.f);
+  g.setGradientFill(ColourGradient(Colours::white.withAlpha(.16f), 0, cap.getY(), Colours::transparentWhite, 0, cap.getCentreY(), false)); g.fillEllipse(cap.reduced(2.f)); // light from above
+  const auto from = point(outer * .3f), to = point(outer - 1.5f);
+  g.setColour(Colours::black.withAlpha(.6f)); g.drawLine(from.x, from.y + 1, to.x, to.y + 1, jmax(2.5f, diameter * .09f));
+  g.setColour(accent); g.drawLine(from.x, from.y, to.x, to.y, jmax(2.f, diameter * .07f));                               // index line, section colour
+  if (!slider.isEnabled()) { g.setColour(panel.withAlpha(.5f)); g.fillEllipse(area.expanded(1)); }
  }
  // The patch selector is drawn as text inside the LED display window painted by the editor.
  void drawComboBox(Graphics& g, int w, int h, bool, int, int, int, int, ComboBox& box) override {
@@ -153,6 +163,7 @@ public:
   knob.onValueChange = [this] { repaint(); };
  }
  void resized() override { knob.setBounds(getWidth() / 2 - 25, centreY - 25, 50, 50); }
+ void setKnobColour(Colour colour) { knob.setColour(Slider::rotarySliderFillColourId, colour); }
  void paint(Graphics& g) override {
   const int current = jlimit(0, names.size() - 1, roundToInt(knob.getValue()));
   for (int i = 0; i < names.size(); ++i) { const bool on = i == current; g.setColour(on ? orbitui::led : orbitui::dim); drawShape(g, names[i], Rectangle<float>(21, 13).withCentre(symbolCentre(i)), on ? 2.f : 1.4f); }
@@ -213,7 +224,7 @@ class Editor : public AudioProcessorEditor, private Timer {
   Row(Editor& e, int rowY, int rowH, int rowPage, float totalUnits, int count) : editor(e), x(left), y(rowY), height(rowH), page(rowPage), unit(float(contentW - gap * (count - 1)) / totalUnits) {}
   Rectangle<int> next(const String& title, Colour colour, float units) {
    const int width = roundToInt(units * unit); const Rectangle<int> area(x, y, width, height);
-   editor.sections.push_back({title, colour, area, page}); x += width + gap; return area.withTrimmedTop(34);
+   editor.sections.push_back({title, colour, area, page}); editor.sectionColour = colour; x += width + gap; return area.withTrimmedTop(34);
   }
  };
 public:
@@ -255,7 +266,7 @@ private:
  }
  Fader& addControl(const char* id, Slider::SliderStyle style, Rectangle<int> bounds, int page) {
   auto* fader = faders.add(new Fader()); fader->id = id;
-  setUpSlider(fader->slider, id, style); place(fader->slider, bounds, page);
+  setUpSlider(fader->slider, id, style); fader->slider.setColour(Slider::rotarySliderFillColourId, sectionColour); place(fader->slider, bounds, page);
   fader->attachment = std::make_unique<APVTS::SliderAttachment>(orbit.state, id, fader->slider);
   auto* parameter = orbit.state.getParameter(id);
   fader->slider.setDoubleClickReturnValue(true, parameter->convertFrom0to1(parameter->getDefaultValue()));
@@ -282,7 +293,8 @@ private:
  }
  void addWaveKnob(const char* id, const char* text, const StringArray& names, int page, Rectangle<int> cell, bool nameBelow = true) {
   caption(text, cell.withHeight(16), page);
-  place(*waveKnobs.add(new WaveKnob(orbit.state, id, names, nameBelow)), {cell.getX(), cell.getY() + 26, cell.getWidth(), 104}, page);
+  auto* selector = waveKnobs.add(new WaveKnob(orbit.state, id, names, nameBelow)); selector->setKnobColour(sectionColour);
+  place(*selector, {cell.getX(), cell.getY() + 26, cell.getWidth(), 104}, page);
  }
  // A small knob with its caption, for columns of the second row that stack two controls.
  void addMiniKnob(const char* id, const char* text, Rectangle<int> area) {
@@ -383,7 +395,7 @@ private:
   addChoice("mode", "POLYPHONY", {"6", "8"}, -1, cells[0], false); addChoice("voiceMode", "ASSIGN", {"POLY", "MONO", "UNI"}, -1, cells[1], false, bright);
   cells = split(row.next("GLIDE / BEND", neutral, 3.6f), {1, 1, 1});
   addKnob("portamento", "PORTA", cells[0]); addKnob("bendRange", "BEND", cells[1]); addKnob("unisonSpread", "SPREAD", cells[2]);
-  cells = split(row.next("ARPEGGIO", teal, 11.4f), {1, 1, 4, 3, 2.4f, 1.3f, 1.3f});
+  cells = split(row.next("ARPEGGIO", teal, 11.8f), {1, 1, 4, 3, 2.4f, 1.3f, 1.3f});
   addToggle("arpOn", "ON", -1, cells[0].withHeight(46).reduced(3, 0), 1, teal); addToggle("arpSync", "SYNC", -1, cells[1].withHeight(46).reduced(3, 0), 1, neutral);
   caption("HOST", {cells[1].getX(), cells[1].getY() + 52, cells[1].getWidth(), 14}, -1, 11.f, dim);
   addChoice("arpPattern", "MODE", {"UP", "DOWN", "U&D", "RND"}, -1, cells[2], false); addChoice("arpDivision", "STEP", {"1/4", "1/8", "1/16"}, -1, cells[3], false, bright); addChoice("arpOctaves", "OCTAVES", {"1", "2", "3"}, -1, cells[4], false);
@@ -396,9 +408,13 @@ private:
   delayTimeKnob = &addControl("delayTime", Slider::RotaryHorizontalVerticalDrag, Rectangle<int>(cells[0].getCentreX() - timeWidth / 2, cells[0].getY() + 13, timeWidth, 46), -1).slider;
   place(*menuButtons.add(new ChoiceMenuButton(*orbit.state.getParameter("delaySync"))), {cells[0].getX() + 1, cells[0].getY() + 60, cells[0].getWidth() - 2, 24}, -1);
   addKnob("delayFeedback", "FDBK", cells[1]); addKnob("delayMod", "MOD", cells[2]); addKnob("delayMix", "LEVEL", cells[3]);
-  cells = split(row.next("REVERB", amber, 5.f), {1.5f, 1.17f, 1.17f, 1.17f});
-  place(*choices.add(new ChoiceButtons(*orbit.state.getParameter("reverbType"), {"VINT", "PLATE"}, true, bright)), {cells[0].getX() + 2, cells[0].getY() + 6, cells[0].getWidth() - 4, 65}, -1);
-  addKnob("reverbSize", "SIZE", cells[1]); addKnob("reverbDamp", "DAMP", cells[2]); addKnob("reverbMix", "LEVEL", cells[3]);
+  // SIZE shares its column with the type selector (VINT / PLATE), as TIME does with the delay sync.
+  cells = split(row.next("REVERB", amber, 4.6f), {1, 1, 1, 1});
+  caption("SIZE", cells[0].withHeight(14), -1, 12.f);
+  const int sizeWidth = jmin(50, cells[0].getWidth());
+  addControl("reverbSize", Slider::RotaryHorizontalVerticalDrag, Rectangle<int>(cells[0].getCentreX() - sizeWidth / 2, cells[0].getY() + 13, sizeWidth, 46), -1);
+  place(*menuButtons.add(new ChoiceMenuButton(*orbit.state.getParameter("reverbType"))), {cells[0].getX() + 1, cells[0].getY() + 60, cells[0].getWidth() - 2, 24}, -1);
+  addKnob("reverbDamp", "DAMP", cells[1]); addKnob("reverbColor", "COLOR", cells[2]); addKnob("reverbMix", "LEVEL", cells[3]);
   addKnob("gain", "VOLUME", row.next("OUTPUT", neutral, 1.3f));
  }
 
@@ -486,6 +502,6 @@ private:
  OwnedArray<Label> labels; OwnedArray<Fader> faders; OwnedArray<Toggle> toggles; OwnedArray<ChoiceButtons> choices; OwnedArray<WaveKnob> waveKnobs; OwnedArray<ChoiceMenuButton> menuButtons; Slider* delayTimeKnob = nullptr;
  OwnedArray<TextButton> bankButtons, patchButtons;
  ComboBox presets; TextButton saveButton, loadButton, octDown, octUp;
- StringArray userNames; String displayLine;
+ StringArray userNames; String displayLine; Colour sectionColour{orbitui::neutral};
  int page = 0, octave = 2, shownBank = 0, lastProgram = -1;
 };

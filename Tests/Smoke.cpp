@@ -209,6 +209,7 @@ int main() {
    double typeDifference=0;for(size_t i=0;i<hall.size();++i)typeDifference+=std::abs(hall[i]-plate[i]);if(typeDifference<.01){std::cerr<<"The two reverbs are identical\n";return 59;}}
   if(diff(extendedRender({{"delayMix",.6f},{"delayTime",.05f},{"delayMod",0}}),extendedRender({{"delayMix",.6f},{"delayTime",.05f},{"delayMod",1}}))<.01){std::cerr<<"Delay modulation has no effect\n";return 60;}
   if(diff(extendedRender({{"delayMix",.6f},{"delaySync",0}}),extendedRender({{"delayMix",.6f},{"delaySync",9}}))<.01||diff(extendedRender({{"delayMix",.6f},{"delaySync",9}}),extendedRender({{"delayMix",.6f},{"delaySync",10}}))<.01){std::cerr<<"Delay tempo sync has no effect\n";return 62;}
+  for(float type:{0.f,1.f})if(diff(extendedRender({{"reverbMix",.6f},{"reverbType",type},{"reverbColor",0}}),extendedRender({{"reverbMix",.6f},{"reverbType",type},{"reverbColor",1}}))<.01){std::cerr<<"Reverb colour has no effect on type "<<type<<"\n";return 63;}
   {auto loud=extendedRender({{"delayMix",.65f},{"delayTime",.05f},{"delayFeedback",1.1f}});for(float v:loud)if(!std::isfinite(v)||std::abs(v)>1.001f){std::cerr<<"Delay self-oscillation is not bounded\n";return 61;}}
   std::cout<<"PASS oscillator sync, cross modulation, patch change keeps level, hold, vintage and plate reverbs, delay modulation and feedback\n";
  }

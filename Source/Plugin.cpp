@@ -36,7 +36,23 @@ public:
  static AudioProcessorValueTreeState::ParameterLayout parameters() {
   AudioProcessorValueTreeState::ParameterLayout l;
   l.add(std::make_unique<AudioParameterChoice>(ParameterID{"mode",1},"Voices",StringArray{"6 voices","8 voices"},0));
-  auto add=[&](const char* id,const char* name,float lo,float hi,float def,float skew=1.f) { l.add(std::make_unique<AudioParameterFloat>(ParameterID{id,1},name,NormalisableRange<float>(lo,hi,0,skew),def)); };
+  // Values are shown on the scale printed around the control: the eleven marks read 0 to 10 (or -5 to +5 for a
+  // control centred on zero), so mark 3 always displays 3.0. Controls with a real unit add it in brackets,
+  // for example "4.0 (120 BPM)" or "6.3 (1800 Hz)".
+  auto add=[&](const char* id,const char* name,float lo,float hi,float def,float skew=1.f) {
+   const NormalisableRange<float> range(lo,hi,0,skew);const bool centred=lo<0.f,whole=hi>=100.f,fine=lo>0.f&&lo<.06f;
+   String unit=String(name).fromFirstOccurrenceOf("(",false,false).upToFirstOccurrenceOf(")",false,false);
+   const String key(id);if(key=="arpTempo")unit="BPM";if(key=="fattack"||key=="fdecay"||key=="frelease")unit="s";if(key=="osc2Tune")unit="st";
+   if(unit=="semitones")unit="st";if(unit=="octaves")unit="oct";if(unit=="cents")unit="ct";
+   auto text=[range,centred,whole,fine,unit](float v,int){
+    const float mark=range.convertTo0to1(range.snapToLegalValue(v))*10.f-(centred?5.f:0.f);
+    String shown=(centred&&mark>.04f?"+":"")+String(mark,1);
+    if(unit.isNotEmpty())shown+=" ("+(whole?String(roundToInt(v)):String(v,fine&&std::abs(v)<1.f?2:1))+" "+unit+")";
+    return shown;
+   };
+   auto parse=[range,centred](const String& typed){return range.convertFrom0to1(jlimit(0.f,1.f,(typed.getFloatValue()+(centred?5.f:0.f))/10.f));};
+   l.add(std::make_unique<AudioParameterFloat>(ParameterID{id,1},name,range,def,AudioParameterFloatAttributes().withStringFromValueFunction(text).withValueFromStringFunction(parse)));
+  };
   add("wave","Saw / Pulse",0,1,0.35f);add("width","Pulse width",0.08f,0.92f,0.5f);add("sub","Sub level",0,1,0.7f);add("detune","Detune (cents)",0,30,8);
   add("cutoff","Cutoff (Hz)",25,18000,1800,0.3f);add("resonance","Resonance",0,0.95f,0.2f);add("env","Filter envelope",0,1,0.35f);
   add("attack","Attack (s)",0.002f,5,0.02f,0.35f);add("decay","Decay (s)",0.01f,5,0.6f,0.4f);add("sustain","Sustain",0,1,0.7f);add("release","Release (s)",0.01f,8,0.8f,0.4f);
@@ -53,7 +69,7 @@ public:
   l.add(std::make_unique<AudioParameterChoice>(ParameterID{"arpPattern",1},"Arp pattern",StringArray{"UP","DOWN","UP/DOWN","RANDOM"},0));
   l.add(std::make_unique<AudioParameterChoice>(ParameterID{"arpOctaves",1},"Arp octaves",StringArray{"1 OCT","2 OCT","3 OCT"},0));
   add("fxDrive","Drive",0,1,0);add("delayTime","Delay time (s)",0.03f,1.5f,0.3f);add("delayFeedback","Delay feedback",0,1.1f,0.3f);add("delayMod","Delay modulation",0,1,0.3f);add("delayMix","Delay mix",0,0.65f,0);
-  add("reverbSize","Reverb size",0,1,0.5f);add("reverbDamp","Reverb damping",0,1,0.5f);add("reverbMix","Reverb mix",0,0.65f,0);
+  add("reverbSize","Reverb size",0,1,0.5f);add("reverbDamp","Reverb damping",0,1,0.5f);add("reverbMix","Reverb mix",0,0.65f,0);add("reverbColor","Reverb color",0,1,0.4f);
   add("oscLayer","Oscillator II layer",0,1,0);
   l.add(std::make_unique<AudioParameterBool>(ParameterID{"envLink",1},"Link filter to amp envelope",true));
   auto choice=[&](const char* id,const char* name,StringArray values,int initial=0){l.add(std::make_unique<AudioParameterChoice>(ParameterID{id,1},name,values,initial));};
@@ -66,7 +82,7 @@ public:
   choice("lfoShape","LFO waveform",{"Triangle","Sine","Saw","Square"});
   add("lfoDelay","LFO delay (s)",0,3,0,.5f);add("lfoPitch","LFO pitch (semitones)",0,12,0);add("lfoFilter","LFO filter (octaves)",0,4,0);
   add("envPitch","Envelope pitch (semitones)",-24,24,0);add("wheelDepth","Mod wheel vibrato (semitones)",0,12,1);
-  choice("reverbType","Reverb type",{"Vintage","Plate"});
+  choice("reverbType","Reverb type",{"VINT","PLATE"});
   choice("delaySync","Delay sync",{"FREE","1/2","1/4 D","1/4","1/4 T","1/8 D","1/8","1/8 T","1/16 D","1/16","1/16 T"});
   l.add(std::make_unique<AudioParameterBool>(ParameterID{"hold",1},"Hold",false));l.add(std::make_unique<AudioParameterBool>(ParameterID{"oscSync",1},"Oscillator II sync",false));add("crossMod","Cross modulation II > I",0,1,0);
   choice("vcaMode","VCA mode",{"Envelope","Gate"});choice("envInvert","Filter A envelope polarity",{"Normal","Inverted"});choice("pwmSource","PWM source",{"LFO","Manual","Envelope"});
@@ -178,7 +194,7 @@ public:
    delaySeconds=float(seconds);
   }
   echo.process(buffer,delaySeconds,value("delayFeedback"),value("delayMix"),value("delayMod"));
-  reverb.process(buffer,int(value("reverbType")),value("reverbSize"),value("reverbDamp"),value("reverbMix"));
+  reverb.process(buffer,int(value("reverbType")),value("reverbSize"),value("reverbDamp"),value("reverbColor"),value("reverbMix"));
   gain.setTargetValue(state.getRawParameterValue("gain")->load());
   for(int i=0;i<buffer.getNumSamples();++i) {float g=gain.getNextValue();for(int c=0;c<buffer.getNumChannels();++c) buffer.setSample(c,i,std::tanh(buffer.getSample(c,i)*g));}
  }
