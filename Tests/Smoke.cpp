@@ -207,7 +207,10 @@ int main() {
    const auto hall=reverbTail(0),plate=reverbTail(1);if(hall.empty()||plate.empty()){std::cerr<<"Reverb output is not finite or bounded\n";return 57;}
    if(energy(hall)<1e-6||energy(plate)<1e-6){std::cerr<<"A reverb has no tail: "<<energy(hall)<<" "<<energy(plate)<<"\n";return 58;}
    double typeDifference=0;for(size_t i=0;i<hall.size();++i)typeDifference+=std::abs(hall[i]-plate[i]);if(typeDifference<.01){std::cerr<<"The two reverbs are identical\n";return 59;}}
-  std::cout<<"PASS oscillator sync, cross modulation, patch change keeps level, hold, vintage and plate reverbs\n";
+  if(diff(extendedRender({{"delayMix",.6f},{"delayTime",.05f},{"delayMod",0}}),extendedRender({{"delayMix",.6f},{"delayTime",.05f},{"delayMod",1}}))<.01){std::cerr<<"Delay modulation has no effect\n";return 60;}
+  if(diff(extendedRender({{"delayMix",.6f},{"delaySync",0}}),extendedRender({{"delayMix",.6f},{"delaySync",9}}))<.01||diff(extendedRender({{"delayMix",.6f},{"delaySync",9}}),extendedRender({{"delayMix",.6f},{"delaySync",10}}))<.01){std::cerr<<"Delay tempo sync has no effect\n";return 62;}
+  {auto loud=extendedRender({{"delayMix",.65f},{"delayTime",.05f},{"delayFeedback",1.1f}});for(float v:loud)if(!std::isfinite(v)||std::abs(v)>1.001f){std::cerr<<"Delay self-oscillation is not bounded\n";return 61;}}
+  std::cout<<"PASS oscillator sync, cross modulation, patch change keeps level, hold, vintage and plate reverbs, delay modulation and feedback\n";
  }
  std::unique_ptr<juce::AudioProcessorEditor> editor(p->createEditor());
  auto image=editor->createComponentSnapshot(editor->getLocalBounds());

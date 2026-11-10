@@ -37,7 +37,8 @@ inline float allpass(Line& line, float x, float gain, float delay) { const float
 //  - every line is slowly and smoothly modulated at its own speed, which gives the gently moving, chorused tail;
 //  - low frequencies are left to ring longer than the rest (bassMultiply) while DAMP shortens the highs,
 //    as in a real hall;
-//  - left and right inputs stay separate all the way through, so the image is wide.
+//  - left and right inputs stay separate all the way through, so the image is wide;
+//  - the loop saturates softly, so a loud tail thickens instead of staying clinically clean.
 class VintageHall {
 public:
  void prepare(double sampleRate) {
@@ -73,23 +74,28 @@ public:
   preL.write(inL); preR.write(inR);
   for (size_t i = 0; i < 3; ++i) { a = allpass(diffuserL[i], a, .62f, diffuserLeftMs[i] * .001f * sr); b = allpass(diffuserR[i], b, .62f, diffuserRightMs[i] * .001f * sr); }
   tonedL += inputTone * (a - tonedL); tonedR += inputTone * (b - tonedR);
-  const float scale = stretch.getNextValue() * .001f * sr, wobble = .0009f * sr;
+  const float scale = stretch.getNextValue() * .001f * sr, wobble = wobbleMs * .001f * sr * .5f;
   std::array<float, count> v;
   for (size_t i = 0; i < count; ++i) {
    phase[i] += rateHz[i] / sr; if (phase[i] >= 1.f) phase[i] -= 1.f;
-   const float x = 2.f * phase[i] - 1.f, sine = 4.f * x * (1.f - std::abs(x)); // smooth sine-like sweep, no corners
+   const float x = 2.f * phase[i] - 1.f, slow = 4.f * x * (1.f - std::abs(x)); // smooth sine-like sweep, no corners
+   float quick = phase[i] * 5.f; quick -= std::floor(quick); const float y2 = 2.f * quick - 1.f;
+   const float sine = (1.f - flutterShare) * slow + flutterShare * 4.f * y2 * (1.f - std::abs(y2));
    float y = lines[i].tap(lengthMs[i] * scale + wobble * (1.f + sine) + 2.f);
    y = allpass(inner[i], y, .5f, innerMs[i] * .001f * sr);
    highState[i] += damp * (y - highState[i]); lowState[i] += lowSplit * (highState[i] - lowState[i]);
    v[i] = high[i] * highState[i] + (low[i] - high[i]) * lowState[i];
   }
-  left = .4f * (v[0] - v[2] + v[4] - v[6]) + .45f * earlyL; right = .4f * (v[1] - v[3] + v[5] - v[7]) + .45f * earlyR;
+  left = .4f * (v[0] - v[2] + v[4] - v[6]) + earlyLevel * earlyL; right = .4f * (v[1] - v[3] + v[5] - v[7]) + earlyLevel * earlyR;
   for (size_t length = 1; length < count; length <<= 1) for (size_t i = 0; i < count; i += length * 2) for (size_t j = i; j < i + length; ++j) { const float p = v[j], q = v[j + length]; v[j] = p + q; v[j + length] = p - q; }
-  for (size_t i = 0; i < count; ++i) lines[i].write(v[i] * .35355339f + .5f * ((i & 1) ? tonedR : tonedL)); // 1/sqrt(8): the mix neither adds nor loses energy
+  for (size_t i = 0; i < count; ++i) lines[i].write(std::tanh(v[i] * .35355339f + .5f * ((i & 1) ? tonedR : tonedL))); // 1/sqrt(8): the mix neither adds nor loses energy; tanh: loud tails compress and thicken like old hardware
  }
 private:
  static constexpr size_t count = 8;
- static constexpr float bassMultiply = 1.3f;
+ static constexpr float bassMultiply = 1.5f;   // how much longer the lows ring than the mids
+ static constexpr float earlyLevel = .6f;     // early reflections against the tail
+ static constexpr float wobbleMs = 1.5f;      // depth of the slow pitch movement in the tail
+ static constexpr float flutterShare = .2f;   // a faster, smaller movement on top of it
  static constexpr std::array<float, count> lengthMs{43.3f, 51.7f, 61.9f, 71.3f, 83.9f, 97.1f, 113.3f, 131.9f};
  static constexpr std::array<float, count> innerMs{11.3f, 13.7f, 17.9f, 19.3f, 23.9f, 27.1f, 29.7f, 33.1f};
  static constexpr std::array<float, count> rateHz{.07f, .11f, .17f, .23f, .31f, .41f, .47f, .59f};

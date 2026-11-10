@@ -183,6 +183,22 @@ private:
  StringArray names; bool showName; Slider knob; std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment> attachment;
 };
 
+// Small button that shows the current value of a choice parameter and opens a menu to change it.
+class ChoiceMenuButton : public TextButton {
+public:
+ explicit ChoiceMenuButton(RangedAudioParameter& choice)
+  : parameter(choice), attachment(choice, [this](float value) { const auto names = parameter.getAllValueStrings(); setButtonText(names[jlimit(0, names.size() - 1, roundToInt(value))]); }, nullptr) {
+  onClick = [this] {
+   PopupMenu menu; const auto names = parameter.getAllValueStrings(); const int current = roundToInt(parameter.convertFrom0to1(parameter.getValue()));
+   for (int i = 0; i < names.size(); ++i) menu.addItem(i + 1, names[i], true, i == current);
+   menu.showMenuAsync(PopupMenu::Options().withTargetComponent(this), [safe = Component::SafePointer<ChoiceMenuButton>(this)](int result) { if (safe != nullptr && result > 0) safe->attachment.setValueAsCompleteGesture(float(result - 1)); });
+  };
+  attachment.sendInitialUpdate();
+ }
+private:
+ RangedAudioParameter& parameter; ParameterAttachment attachment;
+};
+
 class Editor : public AudioProcessorEditor, private Timer {
  using APVTS = AudioProcessorValueTreeState;
  enum { designW = 1480, designH = 820, left = 40, contentW = 1400, gap = 6 };
@@ -363,18 +379,23 @@ private:
  void buildLowerRow() {
   using namespace orbitui;
   Row row(*this, lowerY, lowerH, -1, 32.4f, 7);
-  auto cells = split(row.next("VOICES", neutral, 5.6f), {2, 3});
+  auto cells = split(row.next("VOICES", neutral, 5.2f), {2, 3});
   addChoice("mode", "POLYPHONY", {"6", "8"}, -1, cells[0], false); addChoice("voiceMode", "ASSIGN", {"POLY", "MONO", "UNI"}, -1, cells[1], false, bright);
   cells = split(row.next("GLIDE / BEND", neutral, 3.6f), {1, 1, 1});
   addKnob("portamento", "PORTA", cells[0]); addKnob("bendRange", "BEND", cells[1]); addKnob("unisonSpread", "SPREAD", cells[2]);
-  cells = split(row.next("ARPEGGIO", teal, 12), {1, 1, 4, 3, 2.4f, 1.3f, 1.3f});
+  cells = split(row.next("ARPEGGIO", teal, 11.4f), {1, 1, 4, 3, 2.4f, 1.3f, 1.3f});
   addToggle("arpOn", "ON", -1, cells[0].withHeight(46).reduced(3, 0), 1, teal); addToggle("arpSync", "SYNC", -1, cells[1].withHeight(46).reduced(3, 0), 1, neutral);
   caption("HOST", {cells[1].getX(), cells[1].getY() + 52, cells[1].getWidth(), 14}, -1, 11.f, dim);
   addChoice("arpPattern", "MODE", {"UP", "DOWN", "U&D", "RND"}, -1, cells[2], false); addChoice("arpDivision", "STEP", {"1/4", "1/8", "1/16"}, -1, cells[3], false, bright); addChoice("arpOctaves", "OCTAVES", {"1", "2", "3"}, -1, cells[4], false);
   addKnob("arpTempo", "TEMPO", cells[5]); addKnob("arpGate", "GATE", cells[6]);
   addKnob("fxDrive", "AMOUNT", row.next("DRIVE", amber, 1.3f));
-  cells = split(row.next("DELAY", amber, 3.6f), {1, 1, 1});
-  addKnob("delayTime", "TIME", cells[0]); addKnob("delayFeedback", "FDBK", cells[1]); addKnob("delayMix", "LEVEL", cells[2]);
+  cells = split(row.next("DELAY", amber, 4.6f), {1, 1, 1, 1});
+  // TIME shares its column with the sync selector: FREE uses the knob, a note value follows the tempo.
+  caption("TIME", cells[0].withHeight(14), -1, 12.f);
+  const int timeWidth = jmin(50, cells[0].getWidth());
+  delayTimeKnob = &addControl("delayTime", Slider::RotaryHorizontalVerticalDrag, Rectangle<int>(cells[0].getCentreX() - timeWidth / 2, cells[0].getY() + 13, timeWidth, 46), -1).slider;
+  place(*menuButtons.add(new ChoiceMenuButton(*orbit.state.getParameter("delaySync"))), {cells[0].getX() + 1, cells[0].getY() + 60, cells[0].getWidth() - 2, 24}, -1);
+  addKnob("delayFeedback", "FDBK", cells[1]); addKnob("delayMod", "MOD", cells[2]); addKnob("delayMix", "LEVEL", cells[3]);
   cells = split(row.next("REVERB", amber, 5.f), {1.5f, 1.17f, 1.17f, 1.17f});
   place(*choices.add(new ChoiceButtons(*orbit.state.getParameter("reverbType"), {"VINT", "PLATE"}, true, bright)), {cells[0].getX() + 2, cells[0].getY() + 6, cells[0].getWidth() - 4, 65}, -1);
   addKnob("reverbSize", "SIZE", cells[1]); addKnob("reverbDamp", "DAMP", cells[2]); addKnob("reverbMix", "LEVEL", cells[3]);
@@ -455,13 +476,14 @@ private:
   if (line != displayLine) { displayLine = line; surface.repaint(300, 22, 300, 26); }
   // Standalone only: keep the typing keys on the piano keyboard. Inside a DAW the host keeps its own shortcuts.
   if (orbit.wrapperType == AudioProcessor::wrapperType_Standalone && isShowing() && Component::getCurrentlyFocusedComponent() == nullptr && Component::getCurrentlyModalComponent() == nullptr) keyboard.grabKeyboardFocus();
+  if (delayTimeKnob != nullptr) delayTimeKnob->setAlpha(orbit.state.getRawParameterValue("delaySync")->load() > .5f ? .35f : 1.f); // the knob is idle while synced
   const bool linked = orbit.state.getRawParameterValue("envLink")->load() > .5f;
   for (auto* fader : faders) if (fader->followsLink) fader->slider.setAlpha(linked ? .4f : 1.f); // dimmed, but still grabbable
  }
 
  Orbit& orbit; OrbitLook look; Surface surface; PianoKeyboard keyboard;
  std::vector<Section> sections; std::vector<std::pair<Component*, int>> paged;
- OwnedArray<Label> labels; OwnedArray<Fader> faders; OwnedArray<Toggle> toggles; OwnedArray<ChoiceButtons> choices; OwnedArray<WaveKnob> waveKnobs;
+ OwnedArray<Label> labels; OwnedArray<Fader> faders; OwnedArray<Toggle> toggles; OwnedArray<ChoiceButtons> choices; OwnedArray<WaveKnob> waveKnobs; OwnedArray<ChoiceMenuButton> menuButtons; Slider* delayTimeKnob = nullptr;
  OwnedArray<TextButton> bankButtons, patchButtons;
  ComboBox presets; TextButton saveButton, loadButton, octDown, octUp;
  StringArray userNames; String displayLine;

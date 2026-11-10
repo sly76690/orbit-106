@@ -1,60 +1,35 @@
-# Fidélité : état des preuves et prochaine étape
+# Fidélité : ce qui est modélisé, et comment
 
-## État actuel
+## Principe
 
-Prototype original compilé AU, VST3 et autonome. Tests audio à 44,1 / 48 / 96 kHz, extinction des notes, restauration de l'état et rendu de l'éditeur réussis. Pas encore validé dans le DAW. Aucune mesure comparative du matériel original ; aucune fidélité sonore démontrée.
+Orbit est un instrument original. Son moteur s'inspire du comportement documenté des polysynthés analogiques du début des années 80, à partir de sources publiques : manuels d'utilisation et de service, schémas, littérature sur les circuits et sur le traitement du signal. Aucun logiciel tiers n'est analysé, décompilé ni repris.
 
-## Références identifiées
+Toutes les constantes du moteur sont des valeurs de départ réglées à l'oreille. Aucune n'est une mesure d'un instrument réel, et aucune fidélité sonore n'est démontrée.
 
-- Roland, spécifications JUNO-106 : https://support.roland.com/hc/en-us/articles/201966419-JUNO-106-Technical-Specifications
-- Manuel original JUNO-106 : https://cdn.roland.com/assets/media/pdf/JUNO-106_OM.pdf
-- Roland, description du chorus BBD et du LFO : https://rolandcorp.com.au/blog/roland-icon-series-juno-106-synthesizer
-- Roland, spécifications JUPITER-8 : https://support.roland.com/hc/en-us/articles/201945109-JUPITER-8-Technical-Specifications
-- Roland, architecture et enveloppes JUPITER-8 : https://rolandcorp.com.au/blog/roland-icon-series-the-jupiter-8-synthesizer
+## État par bloc
 
-Ces références établissent des caractéristiques fonctionnelles ; elles ne donnent pas à elles seules les valeurs de calibration du modèle DSP.
+| Bloc | Modèle actuel | Limites |
+|---|---|---|
+| Oscillateurs | scie et impulsion anti-repliées, triangle et sinus simples, sous-oscillateur, bruit par voix | synchro dure non anti-repliée ; pas de dérive ni d'écart entre voix |
+| LFO | global, quatre formes, délai par note | sur les instruments d'époque le délai ne repart qu'après relâchement de toutes les touches |
+| HPF | quatre positions : renfort, neutre, deux coupe-bas | fréquences et pente choisies à l'oreille |
+| Filtre en échelle | quatre étages, résonance rebouclée sans retard, saturation douce | pas d'auto-oscillation ; non calibré |
+| Filtre à état variable | primitive JUCE | générique |
+| Enveloppes | courbes de charge et de décharge | constantes de temps non mesurées |
+| Chorus | une ligne à retard, deux têtes en opposition, passe-bas en entrée et en sortie | vitesses et profondeurs de départ ; pas de bruit de ligne |
+| Réverbes | hall modulé à huit lignes ; plaque à deux boucles croisées | effets ajoutés, sans équivalent sur les instruments d'époque |
 
-## Écarts connus du prototype
+## Valeurs à régler en priorité
 
-- Deux topologies génériques JUCE (ladder et état variable), librement assignables à A/B : aucune identification aux circuits Roland ni calibration matérielle.
-- Chorus JUCE générique : aucune modélisation mesurée du BBD.
-- Enveloppes amp/filtre indépendantes ou liées ; mêmes algorithmes pour les deux allocations de voix.
-- Oscillateurs indépendants, bruit, HPF, quatre formes de LFO, modulation de hauteur/filtre/PWM, molette MIDI, mono/unison/legato présents. Hard sync et cross-modulation audio absents.
-- Courbes des potentiomètres, saturation, dérive, comportement de déclenchement et allocation non calibrés sur le matériel. Les formes triangle/sinus ne constituent pas un modèle analogique.
-
-## Usage de REA
-
-Skill lu ; outils disponibles. Aucun firmware ou binaire de référence fourni ou présent initialement dans ce projet. Aucune analyse REA du synthétiseur original n'a donc encore été effectuée, et aucun Evidence ID n'est revendiqué. Ne pas analyser notre propre compilation comme preuve de fidélité au Roland.
-
-Cible à préciser : modèle Jupiter exact, firmware ou émulation précise. Tous les artefacts et rapports doivent rester dans le projet. Vérifier les destinations d'écriture du fournisseur REA avant analyse pour respecter cette limite.
-
-Un firmware peut renseigner les tables, commandes et temporisations selon ce qu'il contient ; il ne décrit pas intégralement la réponse des circuits analogiques. Une émulation logicielle renseigne son propre comportement, sans prouver l'identité au matériel.
+- `Source/EnsembleChorus.h` : vitesses des modes, retard central, profondeur, passe-bas.
+- `Source/Voice.h` : fréquences du HPF, renfort de basses, courbure des enveloppes (`Contour`), saturation du filtre.
+- `Source/VoiceAllocator.h` : niveau de l'unisson (`unisonExponent`).
+- `Source/Reverbs.h` : longueurs, modulation, durée des graves, pré-délai.
 
 ## Protocole de calibration proposé
 
-Relever modèle, révision, accordage, fréquence d'échantillonnage, niveaux et positions exactes des commandes. Capturer séparément les formes d'onde, balayages du filtre à plusieurs résonances, enveloppes, chorus I / II, puis accords et fins de notes. Comparer fréquence, spectre, temps d'enveloppe, réponse du filtre et modulation stéréo. Séparer les observations, hypothèses et paramètres encore inconnus. Aucune valeur arbitraire ne doit être présentée comme une mesure du matériel.
+Avec un instrument réel ou des enregistrements dont les réglages sont connus : relever modèle, accordage, fréquence d'échantillonnage, niveaux et positions exactes des commandes. Capturer séparément les formes d'onde, des balayages du filtre à plusieurs résonances, les enveloppes, chaque mode du chorus, puis des accords et des fins de notes. Comparer fréquence, spectre, temps d'enveloppe, réponse du filtre et modulation stéréo. Séparer observations, hypothèses et inconnues, et ne jamais présenter une valeur choisie comme une mesure.
 
-## Première inspection REA du 31 octobre 2026
+## Validation logicielle
 
-Le DMG fourni contient un installateur multi-produits. Extraction ciblée des exécutables VST3 uniquement, sans exécution des scripts ni installation. Les PackageInfo annoncent JUNO-106 et JUPITER-8 2.0.2 (build 20102). Les deux exécutables contiennent des tranches Intel x86_64 et Apple arm64.
-
-La provenance tierce du paquet ne permet pas d'attester son identité avec les distributions officielles Roland. Les conclusions portent uniquement sur les octets fournis.
-
-- JUNO SHA-256 : 06876f63d405ef4de6398e173a47d8af33353b21a0f08511f17e3a80d363ee2d
-- Jupiter SHA-256 : 4c849ba61203f06722601c13cec27b11738f04fda8ff2abd0853162c5fa6fb2c
-- REA JUNO : ev_cbc05bfb4940a1023e4c9504f7c3e48fedfb6c4a26b3b9d1703e61ed780533ac
-- REA Jupiter : ev_ba4cb897c3413e9718911fcaac24939c5985cdbf40bb03643fcd0fe01cc85434
-
-Snapshots dans reference/juno-metadata.rea.json et reference/jupiter-metadata.rea.json. Symboles observés : CAssignJu106 (allocation de voix), CEnveloper et CPrmDSPJp8::PRM_DSP_VcfEnv / VcfKey / VcfReso. Leur présence fournit des points d'entrée pour une analyse ultérieure, mais ne démontre ni leurs équations ni leur rôle effectif dans le signal audio. Aucun algorithme n'a encore été décompilé ou intégré au prototype. Les imports/exports peuvent être incomplets selon les symboles conservés.
-
-## Développement et blocage de décompilation
-
-Ajouts testés : enveloppe filtre indépendante Jupiter, passe-haut, suivi clavier, bruit, vélocité réglable, LFO triangulaire, filtre Jupiter 12/24 dB et deux vitesses de chorus. Ces choix sont originaux et non calibrés ; le filtre reste le ladder JUCE.
-
-L'analyse REA de PRM_DSP_VcfEnv à 0x1b1e20 a échoué au démarrage du pont Hopper (provider_timeout, puis cleanup_incomplete). Aucun pseudocode retourné. La tentative de fermeture a également signalé cleanup_incomplete. REA a créé automatiquement /tmp/rea-TUnR8f hors du projet ; ce chemin n'était pas sélectionnable dans cet appel. Ne pas réutiliser ce fournisseur avant résolution du démarrage et maîtrise de ses chemins temporaires. Aucune suppression ni modification manuelle hors projet effectuée.
-
-Validation : compilation AU/VST3/autonome arm64, tests audio à 44,1/48/96 kHz, extinction des notes, état, paramètres extrêmes, dépassement de polyphonie et blocs de 1/17/256 échantillons. Signature ad hoc VST3 vérifiée. DAW non validé ; VST2 non produit faute de SDK.
-
-## Extension hybride du 9 novembre 2026
-
-Oscillateurs I/II indépendants, modulation de hauteur et filtre, molette CC1, priorité dernière note avec retour en mono/unison, legato et sustain, deux emplacements de filtre avec modèles librement assignables et routages A/B/série/parallèle. Implémentation originale à partir des primitives JUCE locales, sans nouvelle extraction REA. Les anciens paramètres conservent leurs identifiants ; les paramètres absents d'un ancien état prennent leurs valeurs par défaut.
+Tests automatiques (`Tests/Smoke.cpp`) : audio à 44,1 / 48 / 96 kHz, extinction des notes, paramètres extrêmes, vol de voix, indépendance à la taille de bloc, arpège, HOLD, mono / unisson / legato, routages de filtres, chorus, délai du LFO, rapidité de l'enveloppe de filtre, HPF, VCA GATE, synchro, cross-modulation, réverbes, rappel des 24 patches, conversion des anciens états, rendu de la façade.

@@ -6,6 +6,7 @@ using namespace juce;
 #include "PresetStorage.h"
 #include "EnsembleChorus.h"
 #include "Reverbs.h"
+#include "CharacterDelay.h"
 #include "NoteHold.h"
 class Orbit;
 struct Sound : SynthesiserSound {
@@ -34,7 +35,7 @@ public:
  bool isPatchModified() const {return modified.load();}
  static AudioProcessorValueTreeState::ParameterLayout parameters() {
   AudioProcessorValueTreeState::ParameterLayout l;
-  l.add(std::make_unique<AudioParameterChoice>(ParameterID{"mode",1},"Engine",StringArray{"106","Jupiter"},0));
+  l.add(std::make_unique<AudioParameterChoice>(ParameterID{"mode",1},"Voices",StringArray{"6 voices","8 voices"},0));
   auto add=[&](const char* id,const char* name,float lo,float hi,float def,float skew=1.f) { l.add(std::make_unique<AudioParameterFloat>(ParameterID{id,1},name,NormalisableRange<float>(lo,hi,0,skew),def)); };
   add("wave","Saw / Pulse",0,1,0.35f);add("width","Pulse width",0.08f,0.92f,0.5f);add("sub","Sub level",0,1,0.7f);add("detune","Detune (cents)",0,30,8);
   add("cutoff","Cutoff (Hz)",25,18000,1800,0.3f);add("resonance","Resonance",0,0.95f,0.2f);add("env","Filter envelope",0,1,0.35f);
@@ -51,7 +52,7 @@ public:
   l.add(std::make_unique<AudioParameterChoice>(ParameterID{"arpDivision",1},"Arp division",StringArray{"1/4","1/8","1/16"},1));
   l.add(std::make_unique<AudioParameterChoice>(ParameterID{"arpPattern",1},"Arp pattern",StringArray{"UP","DOWN","UP/DOWN","RANDOM"},0));
   l.add(std::make_unique<AudioParameterChoice>(ParameterID{"arpOctaves",1},"Arp octaves",StringArray{"1 OCT","2 OCT","3 OCT"},0));
-  add("fxDrive","Drive",0,1,0);add("delayTime","Delay time (s)",0.03f,1.5f,0.3f);add("delayFeedback","Delay feedback",0,0.75f,0.3f);add("delayMix","Delay mix",0,0.65f,0);
+  add("fxDrive","Drive",0,1,0);add("delayTime","Delay time (s)",0.03f,1.5f,0.3f);add("delayFeedback","Delay feedback",0,1.1f,0.3f);add("delayMod","Delay modulation",0,1,0.3f);add("delayMix","Delay mix",0,0.65f,0);
   add("reverbSize","Reverb size",0,1,0.5f);add("reverbDamp","Reverb damping",0,1,0.5f);add("reverbMix","Reverb mix",0,0.65f,0);
   add("oscLayer","Oscillator II layer",0,1,0);
   l.add(std::make_unique<AudioParameterBool>(ParameterID{"envLink",1},"Link filter to amp envelope",true));
@@ -66,6 +67,7 @@ public:
   add("lfoDelay","LFO delay (s)",0,3,0,.5f);add("lfoPitch","LFO pitch (semitones)",0,12,0);add("lfoFilter","LFO filter (octaves)",0,4,0);
   add("envPitch","Envelope pitch (semitones)",-24,24,0);add("wheelDepth","Mod wheel vibrato (semitones)",0,12,1);
   choice("reverbType","Reverb type",{"Vintage","Plate"});
+  choice("delaySync","Delay sync",{"FREE","1/2","1/4 D","1/4","1/4 T","1/8 D","1/8","1/8 T","1/16 D","1/16","1/16 T"});
   l.add(std::make_unique<AudioParameterBool>(ParameterID{"hold",1},"Hold",false));l.add(std::make_unique<AudioParameterBool>(ParameterID{"oscSync",1},"Oscillator II sync",false));add("crossMod","Cross modulation II > I",0,1,0);
   choice("vcaMode","VCA mode",{"Envelope","Gate"});choice("envInvert","Filter A envelope polarity",{"Normal","Inverted"});choice("pwmSource","PWM source",{"LFO","Manual","Envelope"});
   add("bendFilter","Pitch bend to filter (octaves)",0,3,0);
@@ -87,26 +89,26 @@ public:
  static const std::array<Patch,24>& patches() {
   static const std::array<Patch,24> bank{{
    {"INIT / Classic",0,1800,.2f,.02f,.6f,.7f,.8f,.35f,.7f,8,.35f,.35f},
-   {"106 / Velvet Pad",0,1200,.15f,1.2f,1.4f,.8f,2.8f,.3f,.5f,8,.65f,.25f},
-   {"106 / Midnight Bass",0,350,.3f,.004f,.28f,.25f,.18f,.1f,.9f,8,.12f,.6f},
-   {"106 / Glass Pluck",0,900,.5f,.003f,.32f,.05f,.4f,.65f,.2f,8,.45f,.7f},
-   {"JP / Solar Brass",1,1300,.2f,.05f,.5f,.65f,.35f,.1f,0,12,.2f,.5f},
-   {"JP / Aurora Strings",1,2100,.12f,.7f,1.1f,.8f,2.2f,.2f,0,18,.5f,.2f},
-   {"JP / Neon Keys",1,1700,.25f,.006f,.7f,.3f,.65f,.55f,0,7,.35f,.45f},
-   {"JP / Slow Horizon",1,650,.35f,2.1f,2.0f,.8f,4.0f,.4f,0,22,.55f,.6f},
+   {"PAD / Velvet",0,1200,.15f,1.2f,1.4f,.8f,2.8f,.3f,.5f,8,.65f,.25f},
+   {"BASS / Midnight",0,350,.3f,.004f,.28f,.25f,.18f,.1f,.9f,8,.12f,.6f},
+   {"PLUCK / Glass",0,900,.5f,.003f,.32f,.05f,.4f,.65f,.2f,8,.45f,.7f},
+   {"BRASS / Solar",1,1300,.2f,.05f,.5f,.65f,.35f,.1f,0,12,.2f,.5f},
+   {"STRINGS / Aurora",1,2100,.12f,.7f,1.1f,.8f,2.2f,.2f,0,18,.5f,.2f},
+   {"KEYS / Neon",1,1700,.25f,.006f,.7f,.3f,.65f,.55f,0,7,.35f,.45f},
+   {"PAD / Slow Horizon",1,650,.35f,2.1f,2.0f,.8f,4.0f,.4f,0,22,.55f,.6f},
    {"BASS / Round Sub",0,220,.12f,.003f,.35f,.55f,.15f,.85f,1,3,0,.35f},
    {"BASS / Rubber Funk",0,420,.55f,.003f,.2f,.12f,.12f,.45f,.8f,5,.08f,.72f},
    {"BASS / Hybrid Drive",0,650,.2f,.005f,.35f,.4f,.2f,.12f,.75f,9,.05f,.45f},
    {"BASS / Pulse Runner",1,510,.32f,.003f,.18f,.25f,.13f,.9f,.6f,5,0,.5f},
    {"BASS / Deep Velvet",0,180,.18f,.012f,.65f,.8f,.3f,.25f,1,4,.15f,.18f},
-   {"BRASS / Jump - Tribute",1,2500,.08f,.008f,.65f,.72f,.22f,0,0,7,0,.36f},
-   {"BRASS / Jump Wide",1,2100,.1f,.01f,.75f,.75f,.3f,0,0,13,.18f,.4f},
+   {"BRASS / Big Leap",1,2500,.08f,.008f,.65f,.72f,.22f,0,0,7,0,.36f},
+   {"BRASS / Big Leap Wide",1,2100,.1f,.01f,.75f,.75f,.3f,0,0,13,.18f,.4f},
    {"BRASS / Golden Horns",1,1400,.18f,.07f,.55f,.7f,.4f,.1f,0,10,.12f,.5f},
    {"BRASS / Hybrid Stabs",0,1700,.24f,.006f,.22f,.2f,.18f,.1f,.25f,11,.1f,.6f},
    {"BRASS / Soft Ensemble",1,900,.13f,.18f,.8f,.7f,.7f,.2f,0,15,.3f,.35f},
    {"PAD / Silk Cloud",0,800,.15f,1.8f,2.2f,.85f,3.5f,.35f,.35f,12,.6f,.3f},
    {"PAD / Hybrid Aurora",0,1200,.18f,1.2f,1.7f,.75f,3.8f,.15f,.3f,21,.55f,.3f},
-   {"PAD / Jupiter Choir",1,1500,.3f,.9f,1.4f,.7f,2.8f,.7f,0,16,.4f,.25f},
+   {"PAD / Star Choir",1,1500,.3f,.9f,1.4f,.7f,2.8f,.7f,0,16,.4f,.25f},
    {"PAD / Midnight Cinema",1,450,.28f,2.6f,2.5f,.8f,5,.25f,.15f,24,.5f,.5f},
    {"PAD / Glass Atmosphere",0,2400,.4f,.8f,1.8f,.55f,3,.9f,.15f,10,.65f,.2f},
    {"PAD / Warm Horizon",1,700,.1f,1.5f,2,.8f,4,.05f,.2f,18,.4f,.3f}
@@ -134,13 +136,13 @@ public:
  void changeProgramName(int,const String&) override {}
  void prepareToPlay(double sr,int block) override {
   arp.prepare(sr);hold.prepare();previousClassic=previousJupiter=0;modulation.lfo.assign(size_t(jmax(block,8192)),0.f);lfoPhase=0;
-  delay.setSize(2,int(sr*1.6)+2);delay.clear();delayPos=0;sampleRate=sr;delayTime.reset(sr,.05);delayTime.setCurrentAndTargetValue(state.getRawParameterValue("delayTime")->load()*float(sr));reverb.prepare(sr);
+  sampleRate=sr;echo.prepare(sr);reverb.prepare(sr);
   synth.setCurrentPlaybackSampleRate(sr); for(int i=0;i<synth.getNumVoices();++i) static_cast<Voice*>(synth.getVoice(i))->prepare(sr);
   classic.setCurrentPlaybackSampleRate(sr); for(int i=0;i<classic.getNumVoices();++i) static_cast<Voice*>(classic.getVoice(i))->prepare(sr);
   ignoreUnused(block);chorus.prepare(sr);
   gain.reset(sr,0.02);gain.setCurrentAndTargetValue(state.getRawParameterValue("gain")->load());
  }
- void releaseResources() override {synth.allNotesOff(0,false);classic.allNotesOff(0,false);chorus.reset();keyboard.reset();arp.reset();hold.reset();delay.clear();reverb.reset();previousClassic=previousJupiter=0;}
+ void releaseResources() override {synth.allNotesOff(0,false);classic.allNotesOff(0,false);chorus.reset();keyboard.reset();arp.reset();hold.reset();echo.reset();reverb.reset();previousClassic=previousJupiter=0;}
  bool isBusesLayoutSupported(const BusesLayout& b) const override {return b.getMainOutputChannelSet()==AudioChannelSet::stereo();}
  void processBlock(AudioBuffer<float>& buffer,MidiBuffer& midi) override {
   ScopedNoDenormals noDenormals;buffer.clear();keyboard.processNextMidiBuffer(midi,0,buffer.getNumSamples(),true);
@@ -163,12 +165,19 @@ public:
   renderLfo(buffer.getNumSamples());
   (mode==0?classic:synth).renderNextBlock(buffer,midi,0,buffer.getNumSamples());
   chorus.process(buffer,int(value("chorusMode")),value("chorus"));
-  delayTime.setTargetValue(value("delayTime")*float(sampleRate));
-  const float drive=value("fxDrive"),feedback=value("delayFeedback"),wet=value("delayMix");
-  for(int i=0;i<buffer.getNumSamples();++i){const float offset=delayTime.getNextValue();float read=float(delayPos)-offset;while(read<0)read+=float(delay.getNumSamples());int a=int(read),b=(a+1)%delay.getNumSamples();float fraction=read-a;
-   for(int c=0;c<2;++c){float dry=buffer.getSample(c,i);if(drive>0)dry=std::tanh(dry*(1+drive*9))/(1+drive*2);float echo=delay.getSample(c,a)*(1-fraction)+delay.getSample(c,b)*fraction;delay.setSample(c,delayPos,dry+echo*feedback);buffer.setSample(c,i,dry+echo*wet);}
-   delayPos=(delayPos+1)%delay.getNumSamples();
+  // Drive, then the echo.
+  if(const float drive=value("fxDrive");drive>0) for(int c=0;c<2;++c){auto* samples=buffer.getWritePointer(c);for(int i=0;i<buffer.getNumSamples();++i)samples[i]=std::tanh(samples[i]*(1+drive*9))/(1+drive*2);}
+  // Delay time: the TIME knob when free, otherwise a note value at the host tempo (the arpeggio TEMPO knob when there is no host).
+  float delaySeconds=value("delayTime");
+  if(const int syncStep=int(value("delaySync"));syncStep>0) {
+   double tempo=value("arpTempo");
+   if(auto* playHead=getPlayHead()) if(auto position=playHead->getPosition()) if(auto hostBpm=position->getBpm()) tempo=*hostBpm;
+   static const double beats[]={0,2.,1.5,1.,2./3.,.75,.5,1./3.,.375,.25,1./6.}; // D = dotted, T = triplet
+   double seconds=beats[jlimit(1,10,syncStep)]*60./jmax(20.,tempo);
+   while(seconds>1.5)seconds*=.5; // longer than the delay line: fall back to half the value
+   delaySeconds=float(seconds);
   }
+  echo.process(buffer,delaySeconds,value("delayFeedback"),value("delayMix"),value("delayMod"));
   reverb.process(buffer,int(value("reverbType")),value("reverbSize"),value("reverbDamp"),value("reverbMix"));
   gain.setTargetValue(state.getRawParameterValue("gain")->load());
   for(int i=0;i<buffer.getNumSamples();++i) {float g=gain.getNextValue();for(int c=0;c<buffer.getNumChannels();++c) buffer.setSample(c,i,std::tanh(buffer.getSample(c,i)*g));}
@@ -200,7 +209,7 @@ private:
  ModulationBus modulation;double lfoPhase=0;
  std::atomic<bool> modified{false};
  std::atomic<int> currentProgram{0};
- double previousClassic=0,previousJupiter=0,sampleRate=44100;Arpeggiator arp;AudioBuffer<float> delay;int delayPos=0;SmoothedValue<float> delayTime;OrbitReverb reverb;NoteHold hold;
+ double previousClassic=0,previousJupiter=0,sampleRate=44100;Arpeggiator arp;CharacterDelay echo;OrbitReverb reverb;NoteHold hold;
  VoiceAllocator synth,classic;EnsembleChorus chorus;SmoothedValue<float> gain;int lastMode=-1;
 };
 #include "Editor.h"

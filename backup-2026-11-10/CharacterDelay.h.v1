@@ -1,0 +1,45 @@
+#pragma once
+#include "Reverbs.h" // for orbitfx::Line
+
+// Stereo echo with the manners of an analogue or tape delay rather than a clean digital copy:
+//  - each repeat passes a low-pass and a high-pass inside the loop, so echoes get darker and thinner as they recede;
+//  - the loop saturates gently, so high feedback thickens instead of piling up cleanly;
+//  - the delay time drifts very slightly (a slow wow and a faster flutter), in opposite directions on each side;
+//  - the right side runs a touch longer than the left and a little of each side feeds the other, which widens the echoes;
+//  - turning TIME glides the pitch of the echoes, as changing the speed of a tape would.
+// All values are tuning choices, to be adjusted by ear.
+class CharacterDelay {
+public:
+ void prepare(double sampleRate) {
+  sr = float(sampleRate);
+  left.prepare(int(1.7 * sampleRate) + 64); right.prepare(int(1.7 * sampleRate) + 64);
+  lowPass = coefficient(loopLowPassHz); highPass = coefficient(loopHighPassHz);
+  time.reset(sampleRate, .25); time.setCurrentAndTargetValue(.3f * sr);
+  reset();
+ }
+ void reset() { left.clear(); right.clear(); lpL = lpR = hpL = hpR = 0; wow = 0; flutter = .25f; }
+ void process(juce::AudioBuffer<float>& buffer, float seconds, float feedback, float mix) {
+  if (buffer.getNumChannels() < 2) return;
+  time.setTargetValue(juce::jlimit(.01f, 1.6f, seconds) * sr);
+  auto* l = buffer.getWritePointer(0); auto* r = buffer.getWritePointer(1);
+  for (int i = 0; i < buffer.getNumSamples(); ++i) {
+   wow += wowHz / sr; if (wow >= 1.f) wow -= 1.f; flutter += flutterHz / sr; if (flutter >= 1.f) flutter -= 1.f;
+   const float drift = sr * (wowDepth * sine(wow) + flutterDepth * sine(flutter)), t = time.getNextValue();
+   const float echoL = left.tap(juce::jmax(2.f, t + drift)), echoR = right.tap(juce::jmax(2.f, t * rightStretch - drift));
+   lpL += lowPass * (echoL - lpL); hpL += highPass * (lpL - hpL); lpR += lowPass * (echoR - lpR); hpR += highPass * (lpR - hpR);
+   const float toneL = lpL - hpL, toneR = lpR - hpR;
+   left.write(l[i] + feedback * soft((1.f - cross) * toneL + cross * toneR));
+   right.write(r[i] + feedback * soft((1.f - cross) * toneR + cross * toneL));
+   l[i] += mix * toneL; r[i] += mix * toneR;
+  }
+ }
+private:
+ static constexpr float loopLowPassHz = 4200.f, loopHighPassHz = 110.f; // tone of each repeat
+ static constexpr float wowHz = .37f, wowDepth = .0006f, flutterHz = 5.3f, flutterDepth = .00008f; // drift, in seconds
+ static constexpr float rightStretch = 1.012f, cross = .15f, saturation = 1.5f;
+ static float sine(float phase) { const float x = 2.f * phase - 1.f; return 4.f * x * (1.f - std::abs(x)); }
+ static float soft(float x) { return std::tanh(saturation * x) / saturation; }
+ float coefficient(float hz) const { return 1.f - std::exp(-juce::MathConstants<float>::twoPi * hz / sr); }
+ orbitfx::Line left, right; juce::SmoothedValue<float> time;
+ float sr = 44100.f, lowPass = .4f, highPass = .01f, lpL = 0, lpR = 0, hpL = 0, hpR = 0, wow = 0, flutter = .25f;
+};
