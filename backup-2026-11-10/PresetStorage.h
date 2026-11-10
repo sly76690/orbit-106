@@ -1,0 +1,40 @@
+#pragma once
+#include <juce_core/juce_core.h>
+#include <filesystem>
+
+class PresetStorage {
+public:
+ explicit PresetStorage(juce::File project):root(std::move(project)){}
+ juce::File directory() const {return root.getChildFile("Presets/User");}
+ juce::Result checkDirectory() const {
+  namespace fs=std::filesystem;std::error_code error;
+  for(auto path:{root.getChildFile("Presets"),directory()}){
+   if(fs::is_symlink(fs::path(path.getFullPathName().toStdString()),error))return juce::Result::fail("Le dossier de presets ne doit pas être un lien symbolique.");
+   if(path.exists()&&!path.isDirectory())return juce::Result::fail("Le chemin des presets n'est pas un dossier.");
+  }
+  return juce::Result::ok();
+ }
+ static bool validName(const juce::String& name){return name.isNotEmpty() && name.length()<=64 && name==name.trim() && name.containsOnly("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -_");}
+ juce::Result save(const juce::String& name,const juce::XmlElement& xml) const {
+  if(!validName(name))return juce::Result::fail("Nom : 1 à 64 lettres sans accents, chiffres, espaces, tirets ou underscores.");
+  auto check=checkDirectory();if(check.failed())return check;
+  auto file=directory().getChildFile(name+".orbitpreset");
+  std::error_code error;if(file.exists()||std::filesystem::is_symlink(file.getFullPathName().toStdString(),error))return juce::Result::fail("Ce nom existe déjà. Choisissez un nouveau nom pour conserver les deux versions.");
+  auto created=directory().createDirectory();if(created.failed())return created;
+  if(!file.replaceWithText(xml.toString()))return juce::Result::fail("Impossible d'écrire le preset dans le projet.");
+  return juce::Result::ok();
+ }
+ std::unique_ptr<juce::XmlElement> load(const juce::String& name) const {
+  if(!validName(name)||checkDirectory().failed())return {};
+  auto file=directory().getChildFile(name+".orbitpreset");std::error_code error;
+  if(std::filesystem::is_symlink(file.getFullPathName().toStdString(),error)||file.getSize()>1024*1024)return {};
+  auto xml=juce::XmlDocument::parse(file);if(!xml||!xml->hasTagName("OrbitState"))return {};
+  return xml;
+ }
+ juce::StringArray names() const {
+  juce::StringArray result;if(checkDirectory().failed())return result;
+  for(const auto& file:directory().findChildFiles(juce::File::findFiles,false,"*.orbitpreset")){auto name=file.getFileNameWithoutExtension();if(validName(name))result.add(name);}
+  result.sort(true);return result;
+ }
+private:juce::File root;
+};
