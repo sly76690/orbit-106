@@ -30,7 +30,8 @@ public:
  // User presets live in the user's library, so they survive moving or rebuilding the project.
  static File presetRoot(){return File::getSpecialLocation(File::userApplicationDataDirectory).getChildFile("Application Support").getChildFile("SF Instruments").getChildFile("Orbit 106");}
  StringArray userPresetNames() const {return PresetStorage(presetRoot()).names();}
- Result saveUserPreset(const String& name){auto saved=state.copyState();saved.setProperty("program",currentProgram.load(),nullptr);saved.setProperty("modified",false,nullptr);saved.setProperty("userPresetName",name,nullptr);auto xml=saved.createXml();auto result=PresetStorage(presetRoot()).save(name,*xml);if(result.wasOk()){state.state.setProperty("userPresetName",name,nullptr);modified.store(false);}return result;}
+ bool userPresetExists(const String& name) const {return PresetStorage(presetRoot()).exists(name);}
+ Result saveUserPreset(const String& name,bool replace=false){auto saved=state.copyState();saved.setProperty("program",currentProgram.load(),nullptr);saved.setProperty("modified",false,nullptr);saved.setProperty("userPresetName",name,nullptr);auto xml=saved.createXml();auto result=PresetStorage(presetRoot()).save(name,*xml,replace);if(result.wasOk()){state.state.setProperty("userPresetName",name,nullptr);modified.store(false);}return result;}
  Result loadUserPreset(const String& name){auto xml=PresetStorage(presetRoot()).load(name);if(!xml)return Result::fail("Preset absent, invalide ou inaccessible dans Presets/User.");MemoryBlock data;copyXmlToBinary(*xml,data);setStateInformation(data.getData(),int(data.getSize()));state.state.setProperty("userPresetName",name,nullptr);modified.store(false);return Result::ok();}
  bool isPatchModified() const {return modified.load();}
  static AudioProcessorValueTreeState::ParameterLayout parameters() {
@@ -82,7 +83,7 @@ public:
   choice("lfoShape","LFO waveform",{"Triangle","Sine","Saw","Square"});
   add("lfoDelay","LFO delay (s)",0,3,0,.5f);add("lfoPitch","LFO pitch (semitones)",0,12,0);add("lfoFilter","LFO filter (octaves)",0,4,0);
   add("envPitch","Envelope pitch (semitones)",-24,24,0);add("wheelDepth","Mod wheel vibrato (semitones)",0,12,1);
-  choice("reverbType","Reverb type",{"VINT","PLATE"});
+  choice("reverbType","Reverb type",{"VINT","PLATE","SPACE"});
   choice("delaySync","Delay sync",{"FREE","1/2","1/4 D","1/4","1/4 T","1/8 D","1/8","1/8 T","1/16 D","1/16","1/16 T"});
   l.add(std::make_unique<AudioParameterBool>(ParameterID{"hold",1},"Hold",false));l.add(std::make_unique<AudioParameterBool>(ParameterID{"oscSync",1},"Oscillator II sync",false));add("crossMod","Cross modulation II > I",0,1,0);
   choice("vcaMode","VCA mode",{"Envelope","Gate"});choice("envInvert","Filter A envelope polarity",{"Normal","Inverted"});choice("pwmSource","PWM source",{"LFO","Manual","Envelope"});

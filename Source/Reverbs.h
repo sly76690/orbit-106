@@ -4,12 +4,14 @@
 #include <cmath>
 #include <vector>
 
-// Two original algorithmic reverbs sharing one set of controls (size, damping, level):
+// Three original algorithmic reverbs sharing one set of controls (size, damping, colour, level):
 //
 //  VINTAGE  a deep, slowly moving hall in the manner of early digital studio reverbs: early reflections,
 //           then a dense modulated tail whose lows outlast its highs (details above the class).
 //  PLATE    a bright, fast-building plate: input diffusion into two cross-coupled loops of all-pass
 //           filters and delays, the well-known figure-of-eight tank layout from the reverb literature.
+//
+//  SPACE    a very large, slow-blooming space with an optional octave halo (details above the class).
 //
 // All lengths and coefficients are tuning values chosen by design, to be adjusted by ear.
 namespace orbitfx {
@@ -149,28 +151,108 @@ private:
  float sr = 44100.f, k = 1.f, decay = .7f, damp = .5f, dampA = 0, dampB = 0, phase = 0, sweepDepth = 12.f, drive = 0;
 };
 
+// SPACE: a very large, slow-blooming modern space with an optional halo an octave above. Original design:
+//  - the input is heavily diffused (four all-passes per side), so notes swell into the reverb instead of echoing;
+//  - eight long delay lines feed each other equally, as in the hall, but longer and more deeply modulated,
+//    for a tail from 1.5 s to about 25 s that drifts like a slow chorus;
+//  - the lows fade a little faster than the mids, which keeps the long tail airy instead of boomy;
+//  - COLOR adds movement and sends more and more of the tail back in one octave higher
+//    (two cross-faded moving taps on a short delay): each pass climbs again, which gives the rising, glassy halo.
+class Space {
+public:
+ void prepare(double sampleRate) {
+  sr = float(sampleRate);
+  for (size_t i = 0; i < count; ++i) {
+   lines[i].prepare(int((lengthMs[i] * 1.45f + 8.f) * .001f * sr) + 64); inner[i].prepare(int(innerMs[i] * .001f * sr) + 16);
+   phase[i] = float(i) / float(count);
+  }
+  for (size_t i = 0; i < 4; ++i) { diffuserL[i].prepare(int(diffuserLeftMs[i] * .001f * sr) + 16); diffuserR[i].prepare(int(diffuserRightMs[i] * .001f * sr) + 16); }
+  for (size_t i = 0; i < 3; ++i) { bloomL[i].prepare(int(bloomLeftMs[i] * .001f * sr) + 16); bloomR[i].prepare(int(bloomRightMs[i] * .001f * sr) + 16); }
+  window = .085f * sr; shifter.prepare(int(window) + 16);
+  lowSplit = coefficient(180.f); damp = coefficient(8000.f);
+  stretch.reset(sampleRate, .25); stretch.setCurrentAndTargetValue(.9f);
+  clear();
+ }
+ void clear() {
+  for (auto& line : lines) line.clear(); for (auto& line : inner) line.clear();
+  for (auto& line : diffuserL) line.clear(); for (auto& line : diffuserR) line.clear();
+  for (auto& line : bloomL) line.clear(); for (auto& line : bloomR) line.clear();
+  shifter.clear(); highState.fill(0.f); lowState.fill(0.f); shiftPhase = 0;
+ }
+ // colour: 0 = still and plain, 1 = deep movement and a strong octave halo.
+ void configure(float size, float damping, float colour) {
+  colour = juce::jlimit(0.f, 1.f, colour); size = juce::jlimit(0.f, 1.f, size);
+  wobble = (1.2f + 3.f * colour) * .001f * sr * .5f; halo = .04f + .26f * colour; // always a trace of the octave: it is what sets this reverb apart
+  const float target = .6f + .8f * size, seconds = 1.5f + 24.f * size * size;
+  stretch.setTargetValue(target);
+  for (size_t i = 0; i < count; ++i) {
+   const float loop = (lengthMs[i] * target + innerMs[i]) * .001f;
+   high[i] = std::pow(10.f, -3.f * loop / seconds); low[i] = std::pow(10.f, -3.f * loop / (seconds * bassMultiply));
+  }
+  damp = coefficient(18000.f * std::pow(.22f, juce::jlimit(0.f, 1.f, damping))); // highs roll off from 18 kHz down to 4 kHz: brighter than the hall
+ }
+ void process(float inL, float inR, float& left, float& right) {
+  float a = inL, b = inR;
+  for (size_t i = 0; i < 4; ++i) { a = allpass(diffuserL[i], a, .7f, diffuserLeftMs[i] * .001f * sr); b = allpass(diffuserR[i], b, .7f, diffuserRightMs[i] * .001f * sr); }
+  for (size_t i = 0; i < 3; ++i) { a = allpass(bloomL[i], a, .72f, bloomLeftMs[i] * .001f * sr); b = allpass(bloomR[i], b, .72f, bloomRightMs[i] * .001f * sr); } // long smear: the sound fades in
+  const float scale = stretch.getNextValue() * .001f * sr;
+  std::array<float, count> v;
+  for (size_t i = 0; i < count; ++i) {
+   phase[i] += rateHz[i] / sr; if (phase[i] >= 1.f) phase[i] -= 1.f;
+   const float x = 2.f * phase[i] - 1.f, sweep = 4.f * x * (1.f - std::abs(x)); // smooth sine-like sweep
+   float y = lines[i].tap(lengthMs[i] * scale + wobble * (1.f + sweep) + 2.f);
+   y = allpass(inner[i], y, .6f, innerMs[i] * .001f * sr);
+   highState[i] += damp * (y - highState[i]); lowState[i] += lowSplit * (highState[i] - lowState[i]);
+   v[i] = high[i] * highState[i] + (low[i] - high[i]) * lowState[i];
+  }
+  left = .34f * (v[0] - v[2] + v[4] - v[6]); right = .34f * (v[1] - v[3] + v[5] - v[7]);
+  // Octave halo: two taps run through the last 85 ms twice as fast as it is written, cross-faded so the jump back is silent.
+  shiftPhase += 1.f / window; if (shiftPhase >= 1.f) shiftPhase -= 1.f;
+  float up = 0;
+  for (float offset : {0.f, .5f}) {
+   float p = shiftPhase + offset; if (p >= 1.f) p -= 1.f;
+   const float fade = std::sin(juce::MathConstants<float>::pi * p); up += fade * fade * shifter.tap(1.f + window * (1.f - p));
+  }
+  shifter.write(.25f * (v[0] + v[3] + v[5] + v[6]));
+  for (size_t length = 1; length < count; length <<= 1) for (size_t i = 0; i < count; i += length * 2) for (size_t j = i; j < i + length; ++j) { const float p = v[j], q = v[j + length]; v[j] = p + q; v[j + length] = p - q; }
+  for (size_t i = 0; i < count; ++i) lines[i].write(shaped(v[i] * .35355339f + .5f * ((i & 1) ? b : a) + ((i & 2) ? -halo : halo) * up, .5f)); // soft limit: the halo can never run away
+ }
+private:
+ static constexpr size_t count = 8;
+ static constexpr float bassMultiply = .55f;  // the lows ring clearly shorter than the mids
+ static constexpr std::array<float, count> lengthMs{89.3f, 101.9f, 113.7f, 127.3f, 139.9f, 151.7f, 167.3f, 181.1f};
+ static constexpr std::array<float, count> innerMs{13.1f, 16.7f, 19.9f, 22.3f, 26.9f, 30.1f, 34.3f, 37.9f};
+ static constexpr std::array<float, count> rateHz{.05f, .08f, .13f, .19f, .27f, .33f, .43f, .51f};
+ static constexpr std::array<float, 4> diffuserLeftMs{3.1f, 5.3f, 8.9f, 14.3f}, diffuserRightMs{3.7f, 6.1f, 9.7f, 15.1f};
+ float coefficient(float hz) const { return 1.f - std::exp(-juce::MathConstants<float>::twoPi * hz / sr); }
+ static constexpr std::array<float, 3> bloomLeftMs{23.1f, 37.9f, 59.3f}, bloomRightMs{26.3f, 41.7f, 63.1f};
+ std::array<Line, count> lines, inner; std::array<Line, 4> diffuserL, diffuserR; std::array<Line, 3> bloomL, bloomR; Line shifter;
+ std::array<float, count> phase{}, highState{}, lowState{}, high{}, low{};
+ juce::SmoothedValue<float> stretch; float sr = 44100.f, lowSplit = .02f, damp = 1.f, wobble = 60.f, halo = 0, window = 3748.f, shiftPhase = 0;
+};
+
 } // namespace orbitfx
 
 // The reverb stage of the instrument: adds the selected reverb on top of the dry signal.
 class OrbitReverb {
 public:
- enum Type { vintage = 0, plate = 1 };
- void prepare(double sampleRate) { hall.prepare(sampleRate); tank.prepare(sampleRate); wet.reset(sampleRate, .05); wet.setCurrentAndTargetValue(0.f); running = false; }
- void reset() { hall.clear(); tank.clear(); running = false; }
+ enum Type { vintage = 0, plate = 1, space = 2 };
+ void prepare(double sampleRate) { hall.prepare(sampleRate); tank.prepare(sampleRate); cloud.prepare(sampleRate); wet.reset(sampleRate, .05); wet.setCurrentAndTargetValue(0.f); running = false; }
+ void reset() { hall.clear(); tank.clear(); cloud.clear(); running = false; }
  void process(juce::AudioBuffer<float>& buffer, int type, float size, float damping, float colour, float amount) {
   if (buffer.getNumChannels() < 2) return;
-  if (type != lastType) { hall.clear(); tank.clear(); lastType = type; } // never let one reverb's tail leak into the other
+  if (type != lastType) { hall.clear(); tank.clear(); cloud.clear(); lastType = type; } // never let one reverb's tail leak into the other
   wet.setTargetValue(juce::jlimit(0.f, 1.f, amount) * 1.4f);
   if (amount <= 0.f && !wet.isSmoothing()) { if (running) reset(); return; } // level at zero: no cost, and no stale tail later
   running = true;
-  if (type == plate) tank.configure(size, damping, colour); else hall.configure(size, damping, colour);
+  if (type == plate) tank.configure(size, damping, colour); else if (type == space) cloud.configure(size, damping, colour); else hall.configure(size, damping, colour);
   auto* left = buffer.getWritePointer(0); auto* right = buffer.getWritePointer(1);
   for (int i = 0; i < buffer.getNumSamples(); ++i) {
    float wetL = 0, wetR = 0; const float in = .5f * (left[i] + right[i]);
-   if (type == plate) tank.process(in, wetL, wetR); else hall.process(left[i], right[i], wetL, wetR);
+   if (type == plate) tank.process(in, wetL, wetR); else if (type == space) cloud.process(left[i], right[i], wetL, wetR); else hall.process(left[i], right[i], wetL, wetR);
    const float level = wet.getNextValue(); left[i] += level * wetL; right[i] += level * wetR;
   }
  }
 private:
- orbitfx::VintageHall hall; orbitfx::Plate tank; juce::SmoothedValue<float> wet; int lastType = -1; bool running = false;
+ orbitfx::VintageHall hall; orbitfx::Plate tank; orbitfx::Space cloud; juce::SmoothedValue<float> wet; int lastType = -1; bool running = false;
 };

@@ -19,3 +19,4 @@ temp/
 
 /reference/
 *.dmg
+__pycache__/

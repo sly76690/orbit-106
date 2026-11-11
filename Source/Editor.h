@@ -1,13 +1,15 @@
 #pragma once
+#include <BinaryData.h>
 // Orbit front panel: an original layout in the spirit of early-80s programmable polysynths.
-// Everything is laid out on one fixed 1480 x 740 design surface, which is scaled as a whole
+// The vector panel uses a fixed design surface, scaled as a whole
 // when the plugin window is resized. Everything is on one face: a row of faders for the playing
 // controls, and under it a row of knobs and switches for shapes, modulation and the second filter.
 
 namespace orbitui {
- const Colour panel{0xff232527}, ink{0xfff1eee6}, dim{0xffb9b6ad}, amber{0xffe9a23b}, teal{0xff4fb3c4};
- const Colour neutral{0xffcfccc4}, bright{0xffe6e3db}, led{0xffff5a3c}, slot{0xff0b0c0d}, print{0xff141516};
- inline Font face(float size, bool bold = true) { return Font(FontOptions("Avenir Next Condensed", size, bold ? Font::bold : Font::plain)); }
+ const Colour panel{0xff202329}, ink{0xffe3ded2}, dim{0xffb1b1aa}, amber{0xffe58b46}, teal{0xff438c9d};
+ const Colour neutral{0xffd9d3c3}, bright{0xffe6e0d1}, led{0xffedac62}, slot{0xff0b0c0d}, print{0xff141516};
+ inline Font face(float size, bool bold = false) { return Font(FontOptions("DIN Condensed", size, bold ? Font::bold : Font::plain)); }
+ inline Font legend(float size) { return Font(FontOptions("Helvetica Neue", size, Font::plain)); }
  inline Font mono(float size) { return Font(FontOptions("Menlo", size, Font::plain)); }
  inline String utf8(const char* text) { return String::fromUTF8(text); }
  inline void tint(TextButton& button, Colour colour) { button.setColour(TextButton::buttonColourId, colour); button.setColour(TextButton::buttonOnColourId, colour); }
@@ -15,8 +17,55 @@ namespace orbitui {
  inline int ledMode(Button& button) { return int(button.getProperties().getWithDefault("led", 0)); }
 }
 
+// Rendered artwork ("skin"). When every image is present in the Skin folder, the editor shows the rendered
+// panel and controls instead of drawing them; when one is missing it falls back to the drawn interface.
+// The images are produced by tools/orbit_render.py from the layout file the editor writes in the same folder.
+struct OrbitSkin {
+ Image background, knob, fader, led; std::array<Image, 3> index; // index line in amber, teal, neutral
+ bool ready = false;
+ static File folder() { return Orbit::presetRoot().getChildFile("Skin"); }
+ void load() {
+  const auto directory = folder(); const auto get = [&directory](const char* name) { return ImageFileFormat::loadFrom(directory.getChildFile(name)); };
+  background = get("background.jpg"); knob = get("knob.png"); fader = get("fader.png"); led = get("led.png");
+  index[0] = get("index_amber.png"); index[1] = get("index_teal.png"); index[2] = get("index_neutral.png");
+  ready = background.isValid() && knob.isValid() && fader.isValid() && led.isValid() && index[0].isValid() && index[1].isValid() && index[2].isValid();
+ }
+ const Image& indexFor(Colour colour) const { return colour == orbitui::amber ? index[0] : (colour == orbitui::teal ? index[1] : index[2]); }
+ // Sizes of the sprites, in design pixels: the knob image is this many times the knob's diameter (room for
+ // its shadow); the fader cap and the lit LED are drawn in squares of these sides.
+ static constexpr float knobFrame = 1.6f, faderFrame = 48.f, ledFrame = 28.f;
+ // The artwork is rendered from slightly in front of the panel, not straight above (TILT in orbit_render.py),
+ // so the top of a knob is seen as a flattened circle, raised above the knob's centre.
+ static constexpr float tiltCos = 1.f;      // cos(TILT): 1 = artwork seen from straight above
+ static constexpr float topLift = 0.f;      // top of the knob sits on its centre when seen from above
+};
+
+// The approved artwork is the material atlas. Coordinates are in its native 1568x1003 space.
+// Only material patches are sampled; all text, hit regions and parameter bindings remain live.
+struct ReferenceMaterials {
+ Image atlas = ImageCache::getFromMemory(BinaryData::referenceapproved_png, BinaryData::referenceapproved_pngSize);
+ Image knob;
+ ReferenceMaterials() {
+  knob = Image(Image::ARGB, 49, 51, true);
+  // Remove the fixed twelve-o'clock index with adjacent cap material, then draw the live index.
+  { Graphics g(knob); g.drawImage(atlas, 0, 0, 49, 51, 139, 387, 49, 51); }
+  for (int y = 0; y < 25; ++y) for (int x = 21; x <= 27; ++x)
+   knob.setPixelAt(x, y, knob.getPixelAt(16, y).interpolatedWith(knob.getPixelAt(32, y), .5f));
+  // Discard surrounding panel pixels so the atlas does not produce a rectangular tile.
+  for (int y = 0; y < knob.getHeight(); ++y) for (int x = 0; x < knob.getWidth(); ++x) {
+   const float dx = float(x) - 24.f, dy = float(y) - 25.f;
+   const float alpha = jlimit(0.f, 1.f, 22.5f - std::sqrt(dx * dx + dy * dy));
+   knob.setPixelAt(x, y, knob.getPixelAt(x, y).withMultipliedAlpha(alpha));
+  }
+ }
+ void patch(Graphics& g, Rectangle<float> target, Rectangle<int> source) const {
+  g.setOpacity(1.f); g.drawImage(atlas, roundToInt(target.getX()), roundToInt(target.getY()), roundToInt(target.getWidth()), roundToInt(target.getHeight()), source.getX(), source.getY(), source.getWidth(), source.getHeight());
+ }
+};
+
 class OrbitLook : public LookAndFeel_V4 {
 public:
+ ReferenceMaterials materials;
  OrbitLook() {
   using namespace orbitui;
   setColour(Label::textColourId, ink);
@@ -26,54 +75,93 @@ public:
   setColour(PopupMenu::backgroundColourId, Colour(0xff17181a)); setColour(PopupMenu::textColourId, ink); setColour(PopupMenu::headerTextColourId, dim);
   setColour(PopupMenu::highlightedBackgroundColourId, amber); setColour(PopupMenu::highlightedTextColourId, print);
  }
- Font getTextButtonFont(TextButton&, int height) override { return orbitui::face(jlimit(11.f, 15.f, height * .6f)); }
+ const OrbitSkin* skin = nullptr;
+ bool skinned() const { return skin != nullptr && skin->ready; }
+ Font getTextButtonFont(TextButton&, int height) override { return orbitui::face(jlimit(12.f, 17.f, height * .72f)); }
  Font getComboBoxFont(ComboBox&) override { return orbitui::mono(19.f); }
  Font getPopupMenuFont() override { return orbitui::face(16.f, false); }
 
  void drawButtonBackground(Graphics& g, Button& button, const Colour& colour, bool over, bool down) override {
   using namespace orbitui;
   auto area = button.getLocalBounds().toFloat();
+  if (skinned()) { // the cap, its legend and the unlit LED are in the background picture; only what changes is drawn
+   if (const int mode = ledMode(button); mode != 0) {
+    const auto spot = (mode == 1 ? area.removeFromTop(12) : area.removeFromLeft(14)).getCentre();
+    if (button.getToggleState()) g.drawImage(skin->led, Rectangle<float>(OrbitSkin::ledFrame, OrbitSkin::ledFrame).withCentre(spot));
+   }
+   const auto cap = area.reduced(1).withTrimmedBottom(3);
+   const bool cream = button.getProperties().contains("cream");
+   if (button.getToggleState() && !cream && ledMode(button) == 0) { // dark cap: the light bar set in its top edge comes on
+    const Colour glow(0xffffa42a);
+    const auto bar = Rectangle<float>(cap.getWidth() * .44f, 3.f).withCentre({cap.getCentreX(), cap.getY() + 5.5f});
+    for (int i = 1; i <= 5; ++i) { g.setColour(glow.withAlpha(.075f)); g.fillRoundedRectangle(bar.expanded(float(i) * 1.7f), float(i) * 1.7f); }
+    g.setColour(Colour(0xffffb84a)); g.fillRoundedRectangle(bar, 1.5f);
+    g.setColour(Colours::white.withAlpha(.55f)); g.fillRoundedRectangle(bar.reduced(2.f, .8f), 1.f);
+   }
+   if (button.getToggleState() && cream) { // a selected cap is lit from inside: amber over the rendered cap, and a soft glow around it
+    const Colour lit(0xffffa42a);
+    for (int i = 1; i <= 4; ++i) { g.setColour(lit.withAlpha(.045f)); g.fillRoundedRectangle(cap.expanded(float(i) * 1.5f), 3.f + float(i)); }
+    g.setColour(lit.withAlpha(.82f)); g.fillRoundedRectangle(cap.reduced(.5f), 3);
+    g.setColour(Colours::white.withAlpha(.18f)); g.fillRoundedRectangle(cap.reduced(2).withHeight(cap.getHeight() * .4f), 2);
+   }
+   if (down) { g.setColour(Colours::black.withAlpha(.28f)); g.fillRoundedRectangle(cap, 3); }
+   else if (over) { g.setColour(Colours::white.withAlpha(.07f)); g.fillRoundedRectangle(cap, 3); }
+   ignoreUnused(colour); return;
+  }
   if (const int mode = ledMode(button); mode != 0) {
    auto spot = (mode == 1 ? area.removeFromTop(12) : area.removeFromLeft(14)).withSizeKeepingCentre(7, 7);
    const bool on = button.getToggleState();
-   if (on) { g.setColour(led.withAlpha(.35f)); g.fillEllipse(spot.expanded(3)); }
-   g.setColour(on ? led : Colour(0xff3a1512)); g.fillEllipse(spot);
+   if (on) {
+    for (int i = 5; i > 0; --i) { g.setColour(led.withAlpha(.035f)); g.fillEllipse(spot.expanded(float(i))); }
+   }
+   g.setColour(on ? led : Colour(0xff302b21)); g.fillEllipse(spot);
+   if (on) { g.setColour(Colour(0xffffe9b5)); g.fillEllipse(spot.reduced(2)); }
   }
-  auto well = area.reduced(1);
-  auto cap = well.withTrimmedBottom(3);
-  if (down) cap.translate(0, 2);
-  g.setColour(Colour(0xff0c0d0e)); g.fillRoundedRectangle(well, 3);
-  const auto base = (over ? colour.brighter(.12f) : colour).withMultipliedAlpha(button.isEnabled() ? 1.f : .5f);
-  g.setGradientFill(ColourGradient(base, 0, cap.getY(), base.darker(.28f), 0, cap.getBottom(), false)); g.fillRoundedRectangle(cap, 3);
-  g.setColour(Colours::white.withAlpha(.4f)); g.drawHorizontalLine(int(cap.getY()) + 1, cap.getX() + 2, cap.getRight() - 2);
+  const auto well = area.reduced(1).withTrimmedBottom(2);
+  const auto cap = down ? well.translated(0, 1) : well;
+  const int sourceX = button.getToggleState() ? 854 : 899;
+  materials.patch(g, cap, {sourceX, 33, 40, 31});
+  // Replace the atlas legend with unprinted material from the same button.
+  materials.patch(g, cap.withTrimmedLeft(cap.getWidth() * .22f).withTrimmedRight(cap.getWidth() * .22f).reduced(0, 4), {sourceX + 5, 39, 4, 18});
+  if (over) { g.setColour(Colours::white.withAlpha(.08f)); g.fillRoundedRectangle(cap, 2); }
+  if (!button.isEnabled()) { g.setColour(panel.withAlpha(.45f)); g.fillRoundedRectangle(cap, 2); }
+  ignoreUnused(colour);
+
  }
  void drawButtonText(Graphics& g, TextButton& button, bool, bool down) override {
+  const bool creamCap = button.getProperties().contains("cream");
+  if (skinned() && button.getProperties().contains("legendAbove")) return; // its legend is printed on the panel, above the key
+  if (skinned() && !button.getProperties().contains("liveText") && !(button.getToggleState() && creamCap)) return;
+  if (skinned() && button.getProperties().contains("liveText")) { // a small display window: amber characters on dark glass
+   g.setFont(orbitui::mono(12.f)); g.setColour(orbitui::led.withAlpha(button.isEnabled() ? .95f : .4f));
+   g.drawFittedText(button.getButtonText(), button.getLocalBounds().reduced(4, 1), Justification::centred, 1, .8f); return;
+  } // legend already printed on the rendered cap (a lit cap gets its legend redrawn)
   auto area = button.getLocalBounds();
   if (const int mode = orbitui::ledMode(button); mode == 1) area.removeFromTop(12); else if (mode == 2) area.removeFromLeft(14);
   area = area.reduced(3, 1).withTrimmedBottom(3);
   if (down) area.translate(0, 2);
   g.setFont(getTextButtonFont(button, area.getHeight()));
-  g.setColour(orbitui::print.withAlpha(button.isEnabled() ? 1.f : .5f));
+  g.setColour((skinned() && !creamCap ? orbitui::ink : orbitui::print).withAlpha(button.isEnabled() ? 1.f : .5f)); // light legend on a dark rendered cap
   g.drawFittedText(button.getButtonText(), area, Justification::centred, 1, .7f);
  }
 
  // Thin fader: dark slot, tick marks on both sides, small light cap.
  void drawLinearSlider(Graphics& g, int x, int y, int w, int h, float pos, float, float, Slider::SliderStyle, Slider& slider) override {
   using namespace orbitui;
+  if (skinned()) { g.drawImage(skin->fader, Rectangle<float>(OrbitSkin::faderFrame, OrbitSkin::faderFrame).withCentre({float(x) + float(w) * .5f, pos})); ignoreUnused(y, h, slider); return; }
   const float cx = float(x) + float(w) * .5f, top = float(y), length = float(h);
-  g.setColour(dim.withAlpha(slider.isEnabled() ? .9f : .35f));
+  g.setColour(dim.withAlpha(slider.isEnabled() ? .8f : .3f));
   const int marks = jmax(1, int(slider.getProperties().getWithDefault("marks", 10))); // a switch-like fader shows one mark per stop
   for (int i = 0; i <= marks; ++i) {
    const float yy = top + length * float(i) / float(marks), mark = (marks != 10 || i % 5 == 0) ? 9.f : 6.f;
-   g.fillRect(cx - 8 - mark, yy - .5f, mark, 1.f); g.fillRect(cx + 8, yy - .5f, mark, 1.f);
+   g.fillRect(cx - 7 - mark, yy - .4f, mark, .8f); g.fillRect(cx + 7, yy - .4f, mark, .8f);
   }
   g.setColour(slot); g.fillRoundedRectangle(cx - 3, top - 7, 6, length + 14, 3);
   g.setColour(Colour(0xff3a3d40)); g.drawVerticalLine(int(cx) + 3, top - 5, top + length + 5);
-  const Rectangle<float> cap(cx - 12, pos - 6.5f, 24, 13);
-  g.setColour(Colours::black.withAlpha(.5f)); g.fillRoundedRectangle(cap.translated(0, 3), 2);
-  g.setGradientFill(ColourGradient(Colour(0xffe9e7e1), 0, cap.getY(), Colour(0xffa9a7a0), 0, cap.getBottom(), false)); g.fillRoundedRectangle(cap, 2);
-  g.setColour(Colour(0xff2a2c2e)); g.fillRect(cap.getX() + 2, cap.getCentreY() - .5f, cap.getWidth() - 4, 1.f);
-  if (!slider.isEnabled()) { g.setColour(panel.withAlpha(.6f)); g.fillRoundedRectangle(cap.expanded(1), 2); }
+  const Rectangle<float> cap(cx - 13, pos - 9, 26, 20);
+  materials.patch(g, cap, {44, 208, 32, 25});
+  if (!slider.isEnabled()) { g.setColour(panel.withAlpha(.5f)); g.fillRect(cap); }
+
  }
  // Orbit's knob: a dark skirt with a fine bright rim, a raised cap lit from above, and an index line in the
  // colour of the section the knob belongs to, so the eye finds the setting and the section at once.
@@ -81,24 +169,24 @@ public:
   using namespace orbitui;
   auto area = Rectangle<float>(float(x), float(y), float(w), float(h));
   const bool selector = slider.getProperties().contains("selector");
-  const float diameter = jmin(area.getWidth(), area.getHeight()) - (selector ? 6.f : 14.f);
+  const float diameter = jmin(float(slider.getProperties().getWithDefault("faceDiameter", selector ? 38.f : 36.f)),
+                              jmin(area.getWidth(), area.getHeight()) - 8.f);
   area = area.withSizeKeepingCentre(diameter, diameter);
   const auto centre = area.getCentre(); const float angle = start + value * (end - start), outer = diameter * .5f;
   const auto accent = slider.findColour(Slider::rotarySliderFillColourId);
+  if (skinned()) { // rendered body with its shadow, then the index line turned to the current value
+   g.drawImage(skin->knob, area.withSizeKeepingCentre(diameter * OrbitSkin::knobFrame, diameter * OrbitSkin::knobFrame));
+   const auto& line = skin->indexFor(accent); const float scale = diameter * OrbitSkin::knobFrame / float(line.getWidth());
+   g.drawImageTransformed(line, AffineTransform::translation(-float(line.getWidth()) * .5f, -float(line.getHeight()) * .5f).scaled(scale).rotated(angle).scaled(1.f, OrbitSkin::tiltCos).translated(centre.x, centre.y - diameter * OrbitSkin::topLift));
+   ignoreUnused(outer); return;
+  }
   const auto point = [centre, angle](float radius) { return Point<float>(centre.x + std::sin(angle) * radius, centre.y - std::cos(angle) * radius); };
-  g.setColour(dim);
-  if (!selector) for (int i = 0; i <= 10; ++i) { const float a = start + (end - start) * float(i) / 10.f; g.drawLine(centre.x + std::sin(a) * (outer + 2), centre.y - std::cos(a) * (outer + 2), centre.x + std::sin(a) * (outer + (i % 5 == 0 ? 6.f : 4.f)), centre.y - std::cos(a) * (outer + (i % 5 == 0 ? 6.f : 4.f)), 1.f); }
-  g.setColour(Colours::black.withAlpha(.5f)); g.fillEllipse(area.translated(0, diameter * .09f).expanded(1));          // shadow on the panel
-  g.setGradientFill(ColourGradient(Colour(0xff2b2d30), 0, area.getY(), Colour(0xff0c0d0e), 0, area.getBottom(), false)); g.fillEllipse(area); // skirt
-  g.setColour(Colour(0xff6a6e72).withAlpha(.7f)); g.drawEllipse(area.reduced(.5f), 1.f);                                 // bright rim
-  const auto cap = area.reduced(diameter * .16f);
-  g.setColour(Colours::black.withAlpha(.55f)); g.fillEllipse(cap.translated(0, diameter * .05f));                        // the cap stands proud of the skirt
-  g.setGradientFill(ColourGradient(Colour(0xff64686c), 0, cap.getY(), Colour(0xff1d1f21), 0, cap.getBottom(), false)); g.fillEllipse(cap);
-  g.setColour(Colours::white.withAlpha(.22f)); g.drawEllipse(cap.reduced(1.f), 1.f);
-  g.setGradientFill(ColourGradient(Colours::white.withAlpha(.16f), 0, cap.getY(), Colours::transparentWhite, 0, cap.getCentreY(), false)); g.fillEllipse(cap.reduced(2.f)); // light from above
-  const auto from = point(outer * .3f), to = point(outer - 1.5f);
-  g.setColour(Colours::black.withAlpha(.6f)); g.drawLine(from.x, from.y + 1, to.x, to.y + 1, jmax(2.5f, diameter * .09f));
-  g.setColour(accent); g.drawLine(from.x, from.y, to.x, to.y, jmax(2.f, diameter * .07f));                               // index line, section colour
+  g.setImageResamplingQuality(Graphics::highResamplingQuality);
+  for (int i = 4; i > 0; --i) { g.setColour(Colours::black.withAlpha(.06f)); g.fillEllipse(area.translated(1, 3).expanded(float(i))); }
+  g.setOpacity(1.f); g.drawImage(materials.knob, area.expanded(diameter * .08f));
+  const auto from = point(outer * .42f), to = point(outer * .87f);
+  g.setColour(Colours::white.withAlpha(.4f)); g.drawLine(from.x + .7f, from.y, to.x + .7f, to.y, jmax(1.f, diameter * .035f));
+  g.setColour(print); g.drawLine(from.x, from.y, to.x, to.y, jmax(1.2f, diameter * .035f));                               // index line, section colour
   if (!slider.isEnabled()) { g.setColour(panel.withAlpha(.5f)); g.fillEllipse(area.expanded(1)); }
  }
  // The patch selector is drawn as text inside the LED display window painted by the editor.
@@ -112,19 +200,40 @@ public:
 class PianoKeyboard : public MidiKeyboardComponent {
 public:
  using MidiKeyboardComponent::MidiKeyboardComponent;
- void drawWhiteNote(int note, Graphics& g, Rectangle<float> r, bool down, bool over, Colour, Colour) override {
-  const auto top = down ? Colour(0xffe2b877) : Colour(0xffd9d6cf), body = down ? Colour(0xfff0d3a0) : Colour(0xfff4f2ec);
-  g.setGradientFill(ColourGradient(top, 0, r.getY(), body, 0, r.getY() + 30, false)); g.fillRect(r);
-  g.setColour(Colour(0xffc9c6be)); g.fillRect(r.getX() + 1, r.getBottom() - 5, r.getWidth() - 2, 4.f);
-  g.setColour(Colour(0xff77756f)); g.drawRect(r, .6f);
-  if (over && !down) { g.setColour(Colours::white.withAlpha(.3f)); g.fillRect(r); }
-  if (note % 12 == 0) { g.setColour(Colour(0xff6d6b65)); g.setFont(orbitui::face(11.f, false)); g.drawText(MidiMessage::getMidiNoteName(note, true, true, 4), r.removeFromBottom(22), Justification::centred); }
+ const OrbitSkin* skin = nullptr;
+ bool skinned() const { return skin != nullptr && skin->ready; }
+ // With the rendered keyboard the keys are in the background picture: only a held or hovered key is tinted.
+ void tint(Graphics& g, int note, Rectangle<float> r, bool down, bool over, bool black) {
+  if (!down && !over) return;
+  Graphics::ScopedSaveState state(g);
+  if (!black) for (int neighbour : {note - 1, note + 1}) if (MidiMessage::isMidiNoteBlack(neighbour)) g.excludeClipRegion(getRectangleForKey(neighbour).getSmallestIntegerContainer()); // not over the black keys
+  g.setColour(down ? orbitui::amber.withAlpha(black ? .55f : .42f) : Colours::white.withAlpha(black ? .10f : .16f));
+  g.fillRoundedRectangle(r.reduced(1.f, 0.f), 2.f);
  }
- void drawBlackNote(int, Graphics& g, Rectangle<float> r, bool down, bool over, Colour) override {
-  g.setColour(Colour(0xff0d0e0f)); g.fillRoundedRectangle(r, 2);
-  auto inner = r.reduced(2, 1); inner.removeFromBottom(down ? 3 : 7);
-  g.setGradientFill(ColourGradient(down ? Colour(0xffb9853f) : Colour(0xff3a3d40), inner.getX(), 0, Colour(0xff121314), inner.getRight(), 0, false)); g.fillRoundedRectangle(inner, 2);
-  if (over && !down) { g.setColour(Colours::white.withAlpha(.12f)); g.fillRoundedRectangle(r, 2); }
+ void drawWhiteNote(int note, Graphics& g, Rectangle<float> r, bool down, bool over, Colour, Colour) override {
+  if (skinned()) { tint(g, note, r, down, over, false); return; }
+  auto key = r.reduced(.6f, 0);
+  const auto ivory = down ? Colour(0xffe4bb7c) : Colour(0xffe8e1d0);
+  ColourGradient material(Colour(0xff9b968a), key.getX(), key.getY(), ivory, key.getCentreX(), key.getBottom(), false);
+  material.addColour(.15, ivory.brighter(.08f)); material.addColour(.92, ivory);
+  material.addColour(.96, ivory.darker(.15f));
+  g.setGradientFill(material); g.fillRoundedRectangle(key, 2);
+  g.setColour(Colours::black.withAlpha(.65f)); g.drawRoundedRectangle(key, 2, .6f);
+  g.setColour(Colours::white.withAlpha(.3f)); g.drawVerticalLine(int(key.getX()) + 1, key.getY() + 12, key.getBottom() - 8);
+  if (over && !down) { g.setColour(Colours::white.withAlpha(.12f)); g.fillRoundedRectangle(key, 2); }
+
+ }
+ void drawBlackNote(int note, Graphics& g, Rectangle<float> r, bool down, bool over, Colour) override {
+  if (skinned()) { tint(g, note, r, down, over, true); return; }
+  for (int i = 4; i > 0; --i) { g.setColour(Colours::black.withAlpha(.09f)); g.fillRoundedRectangle(r.translated(2, 4).expanded(float(i)), 2); }
+  g.setColour(Colour(0xff090a0a)); g.fillRoundedRectangle(r, 2);
+  auto cap = r.reduced(2, 1).withTrimmedBottom(down ? 3.f : 7.f);
+  ColourGradient material(Colour(0xff3e4140), cap.getX(), cap.getY(), Colour(0xff171919), cap.getRight(), cap.getY(), false);
+  material.addColour(.2, Colour(0xff292d2c)); material.addColour(.85, Colour(0xff161818));
+  g.setGradientFill(material); g.fillRoundedRectangle(cap, 2);
+  g.setColour(Colours::white.withAlpha(.15f)); g.drawVerticalLine(int(cap.getX()) + 1, cap.getY() + 3, cap.getBottom() - 3);
+  if (down || over) { g.setColour(down ? orbitui::amber.withAlpha(.4f) : Colours::white.withAlpha(.1f)); g.fillRoundedRectangle(cap, 2); }
+
  }
 };
 
@@ -135,7 +244,7 @@ public:
   : column(vertical), attachment(parameter, [this](float value) { for (int i = 0; i < buttons.size(); ++i) buttons[i]->setToggleState(i == roundToInt(value), dontSendNotification); }, nullptr) {
   for (int i = 0; i < names.size(); ++i) {
    auto* button = buttons.add(new TextButton(names[i]));
-   button->getProperties().set("led", vertical ? 2 : 1); orbitui::tint(*button, colour); button->setWantsKeyboardFocus(false);
+   button->getProperties().set("led", 0); orbitui::tint(*button, colour); button->setWantsKeyboardFocus(false);
    button->onClick = [this, i] { attachment.setValueAsCompleteGesture(float(i)); };
    addAndMakeVisible(button);
   }
@@ -144,10 +253,46 @@ public:
  void resized() override {
   const int count = buttons.size(), gap = 5; if (count == 0) return;
   if (column) { const int each = jmin(30, (getHeight() - gap * (count - 1)) / count); for (int i = 0; i < count; ++i) buttons[i]->setBounds(0, i * (each + gap), getWidth(), each); }
-  else { const int each = (getWidth() - gap * (count - 1)) / count; for (int i = 0; i < count; ++i) buttons[i]->setBounds(i * (each + gap), 0, each, getHeight()); }
+  else { const int each = (getWidth() - gap * (count - 1)) / count, top = ledOnTop ? 0 : 12; for (int i = 0; i < count; ++i) buttons[i]->setBounds(i * (each + gap), top, each, jmax(20, getHeight() - top)); }
+ }
+ // Plain coloured caps with an LED above each key and the legend printed on the panel above it,
+ // instead of the dark caps with a light bar.
+ void useColouredCaps(Colour colour) {
+  ledOnTop = true;
+  for (auto* button : buttons) { button->getProperties().set("led", 1); button->getProperties().set("cream", true); button->getProperties().set("legendAbove", true); orbitui::tint(*button, colour); }
+  resized();
  }
 private:
- bool column; OwnedArray<TextButton> buttons; ParameterAttachment attachment;
+ bool column, ledOnTop = false; OwnedArray<TextButton> buttons; ParameterAttachment attachment;
+};
+
+// Two-position slide switch bound to a choice parameter: a short fader with one stop at each end and the two
+// names printed beside the stops. The first choice is the upper position. Click a name or drag the cap.
+class SlideSwitch : public Component {
+public:
+ SlideSwitch(RangedAudioParameter& parameter, const StringArray& names)
+  : attachment(parameter, [this](float value) { slider.setValue(1.0 - double(roundToInt(value)), dontSendNotification); }, nullptr) {
+  slider.setSliderStyle(Slider::LinearVertical); slider.setTextBoxStyle(Slider::NoTextBox, false, 0, 0); slider.setRange(0.0, 1.0, 1.0);
+  slider.getProperties().set("marks", 1); slider.setWantsKeyboardFocus(false); slider.setName(parameter.getName(60));
+  slider.onValueChange = [this] { attachment.setValueAsCompleteGesture(float(1 - roundToInt(slider.getValue()))); };
+  addAndMakeVisible(slider);
+  for (int i = 0; i < 2; ++i) {
+   auto* text = legends.add(new Label({}, names[i]));
+   text->setFont(orbitui::face(15.f)); text->setColour(Label::textColourId, orbitui::ink);
+   text->setJustificationType(Justification::centredLeft); text->setInterceptsMouseClicks(false, false); text->setBorderSize({});
+   addAndMakeVisible(text);
+  }
+  attachment.sendInitialUpdate();
+ }
+ void resized() override { // the cap travels from 12 px below the top to 12 px above the bottom of the slider
+  slider.setBounds(getWidth() / 2 - 38, 0, 28, getHeight());
+  const int x = slider.getRight() + 8, width = getWidth() - x;
+  legends[0]->setBounds(x, 4, width, 16); legends[1]->setBounds(x, getHeight() - 20, width, 16);
+ }
+ void mouseDown(const MouseEvent& event) override { if (event.x > slider.getRight()) attachment.setValueAsCompleteGesture(event.y < getHeight() / 2 ? 0.f : 1.f); }
+ void hideLegends() { for (auto* text : legends) text->setVisible(false); } // printed on the rendered panel instead
+private:
+ Slider slider; OwnedArray<Label> legends; ParameterAttachment attachment;
 };
 
 // Stepped rotary selector with a waveform symbol (or a short text) at each position, bound to a choice parameter.
@@ -166,16 +311,16 @@ public:
  void setKnobColour(Colour colour) { knob.setColour(Slider::rotarySliderFillColourId, colour); }
  void paint(Graphics& g) override {
   const int current = jlimit(0, names.size() - 1, roundToInt(knob.getValue()));
-  for (int i = 0; i < names.size(); ++i) { const bool on = i == current; g.setColour(on ? orbitui::led : orbitui::dim); drawShape(g, names[i], Rectangle<float>(21, 13).withCentre(symbolCentre(i)), on ? 2.f : 1.4f); }
-  if (showName) { g.setColour(orbitui::ink); g.setFont(orbitui::face(12.f)); g.drawText(names[current], 0, getHeight() - 16, getWidth(), 14, Justification::centred); }
+  for (int i = 0; i < names.size(); ++i) { const bool on = i == current; g.setColour(on ? orbitui::led : orbitui::dim); drawShape(g, names[i], Rectangle<float>(14, 9).withCentre(symbolCentre(i)), on ? 1.5f : 1.f); }
+  ignoreUnused(showName);
  }
  void mouseDown(const MouseEvent& event) override { for (int i = 0; i < names.size(); ++i) if (symbolCentre(i).getDistanceFrom(event.position) < 14) knob.setValue(i, sendNotificationSync); }
 private:
  static constexpr float startAngle = MathConstants<float>::pi * 1.3f, endAngle = MathConstants<float>::pi * 2.7f;
- enum { centreY = 52 };
+ enum { centreY = 42 };
+ // Each symbol sits around the knob, at the angle the index line points to for that position.
  Point<float> symbolCentre(int index) const {
-  const float angle = startAngle + (endAngle - startAngle) * float(index) / float(jmax(1, names.size() - 1));
-  const float radius = jmin(42.f, (float(getWidth()) * .5f - 11.f) / .81f); // keeps the outer symbols inside a narrow cell
+  const float angle = startAngle + (endAngle - startAngle) * float(index) / float(jmax(1, names.size() - 1)), radius = 33.f;
   return {float(getWidth()) * .5f + std::sin(angle) * radius, float(centreY) - std::cos(angle) * radius};
  }
  static void drawShape(Graphics& g, const String& name, Rectangle<float> r, float thickness) {
@@ -199,6 +344,7 @@ class ChoiceMenuButton : public TextButton {
 public:
  explicit ChoiceMenuButton(RangedAudioParameter& choice)
   : parameter(choice), attachment(choice, [this](float value) { const auto names = parameter.getAllValueStrings(); setButtonText(names[jlimit(0, names.size() - 1, roundToInt(value))]); }, nullptr) {
+  getProperties().set("liveText", true); // its legend changes, so it is drawn rather than printed on the rendered cap
   onClick = [this] {
    PopupMenu menu; const auto names = parameter.getAllValueStrings(); const int current = roundToInt(parameter.convertFrom0to1(parameter.getValue()));
    for (int i = 0; i < names.size(); ++i) menu.addItem(i + 1, names[i], true, i == current);
@@ -212,8 +358,8 @@ private:
 
 class Editor : public AudioProcessorEditor, private Timer {
  using APVTS = AudioProcessorValueTreeState;
- enum { designW = 1480, designH = 820, left = 40, contentW = 1400, gap = 6 };
- enum { headerY = 16, lineY = 108, panelY = 125, panelH = 190, row2Y = 327, row2H = 166, lowerY = 505, lowerH = 120, keysY = 639, keysH = 159 };
+ enum { designW = 1600, designH = 1000, left = 32, contentW = 1536, gap = 12 };
+ enum { headerY = 4, lineY = 80, panelY = 94, panelH = 216, row2Y = 326, row2H = 250, lowerY = 590, lowerH = 164, keysY = 774, keysH = 208 }; // Space below effects separates the keyboard from the editing surface.
  struct Section { String title; Colour colour; Rectangle<int> area; int page; };
  struct Fader { Slider slider; String id; bool followsLink = false; std::unique_ptr<APVTS::SliderAttachment> attachment; };
  struct Toggle { TextButton button; std::unique_ptr<APVTS::ButtonAttachment> attachment; };
@@ -221,7 +367,7 @@ class Editor : public AudioProcessorEditor, private Timer {
  // Hands out consecutive sections of one row; widths are given in fader-sized units.
  struct Row {
   Editor& editor; int x, y, height, page; float unit;
-  Row(Editor& e, int rowY, int rowH, int rowPage, float totalUnits, int count) : editor(e), x(left), y(rowY), height(rowH), page(rowPage), unit(float(contentW - gap * (count - 1)) / totalUnits) {}
+  Row(Editor& e, int rowY, int rowH, int rowPage, float totalUnits, int count, int origin = left, int availableWidth = contentW) : editor(e), x(origin), y(rowY), height(rowH), page(rowPage), unit(float(availableWidth - gap * (count - 1)) / totalUnits) {}
   Rectangle<int> next(const String& title, Colour colour, float units) {
    const int width = roundToInt(units * unit); const Rectangle<int> area(x, y, width, height);
    editor.sections.push_back({title, colour, area, page}); editor.sectionColour = colour; x += width + gap; return area.withTrimmedTop(34);
@@ -233,9 +379,20 @@ public:
   addAndMakeVisible(surface); surface.setBounds(0, 0, designW, designH);
   buildHeader(); buildPanelA(); buildRowTwo(); buildLowerRow(); buildKeyboard();
   setPage(0);
+  // Rendered artwork: write the layout for tools/orbit_render.py, then use its pictures when they match this layout.
+  exportLayout(); skin.load();
+  // Pictures made for another layout would not sit under the controls: the renderer leaves a copy of the layout it used.
+  if (skin.ready && OrbitSkin::folder().getChildFile("layout.rendered.json").loadFileAsString() != OrbitSkin::folder().getChildFile("layout.json").loadFileAsString()) skin.ready = false;
+  look.skin = &skin;
+  if (skin.ready) {
+   for (auto* label : labels) if (!label->getProperties().contains("live")) label->setVisible(false); // captions are printed on the rendered panel
+   for (auto* item : switches) item->hideLegends();
+   keyboard.skin = &skin;                                // and the keys are in the picture too
+   for (auto id : {MidiKeyboardComponent::whiteNoteColourId, MidiKeyboardComponent::shadowColourId, MidiKeyboardComponent::keySeparatorLineColourId}) keyboard.setColour(id, Colours::transparentBlack);
+  }
   setResizable(true, true); getConstrainer()->setFixedAspectRatio(double(designW) / double(designH));
-  setResizeLimits(designW * 7 / 10, designH * 7 / 10, designW * 3 / 2, designH * 3 / 2);
-  setSize(designW * 17 / 20, designH * 17 / 20);
+  setResizeLimits(designW * 8 / 10, designH * 8 / 10, designW * 3 / 2, designH * 3 / 2);
+  setSize(designW * 9 / 10, designH * 9 / 10);
   timerCallback(); startTimerHz(12);
  }
  ~Editor() override { stopTimer(); setLookAndFeel(nullptr); }
@@ -253,11 +410,11 @@ private:
  void place(Component& component, Rectangle<int> bounds, int page) {
   if (&component != &keyboard) component.setWantsKeyboardFocus(false); // typing keys always go to the piano keyboard
   surface.addAndMakeVisible(component); component.setBounds(bounds); if (page >= 0) paged.push_back({&component, page}); }
- void caption(const String& text, Rectangle<int> bounds, int page, float size = 13.f, Colour colour = orbitui::ink) {
+ void caption(const String& text, Rectangle<int> bounds, int page, float size = 15.f, Colour colour = orbitui::ink) {
   auto* label = labels.add(new Label({}, text));
-  label->setFont(orbitui::face(size)); label->setColour(Label::textColourId, colour); label->setJustificationType(Justification::centred);
-  label->setBorderSize({}); label->setMinimumHorizontalScale(.6f); label->setInterceptsMouseClicks(false, false);
-  place(*label, bounds.expanded(5, 0), page);
+  label->setFont(orbitui::legend(jmax(13.f, size))); label->setColour(Label::textColourId, colour); label->setJustificationType(Justification::centred);
+  label->setBorderSize({}); label->setMinimumHorizontalScale(.9f); label->setInterceptsMouseClicks(false, false);
+  place(*label, bounds, page);
  }
  void setUpSlider(Slider& slider, const char* id, Slider::SliderStyle style) {
   auto* parameter = orbit.state.getParameter(id);
@@ -276,25 +433,49 @@ private:
   caption(text, cell.withHeight(16), page);
   return addControl(id, Slider::LinearVertical, Rectangle<int>(cell.getCentreX() - 20, cell.getY() + 28, 40, cell.getHeight() - 38), page);
  }
- void addKnob(const char* id, const char* text, Rectangle<int> cell) {
-  caption(text, cell.withHeight(14), -1, 12.f);
+ void addEffectScale(const char* id, Rectangle<int> cell) {
+  const auto range = orbit.state.getParameter(id)->getNormalisableRange();
+  ignoreUnused(range, id); // every knob reads 0 to 10: just the two ends of the scale, at the foot of the knob
+  const int cx = cell.getCentreX(), y = cell.getY() + 67;
+  caption("0", {cx - 27, y - 5, 12, 10}, -1, 8.f, orbitui::dim); caption("10", {cx + 15, y - 5, 12, 10}, -1, 8.f, orbitui::dim); // kept inside the knob's own column
+ }
+ void addKnob(const char* id, const char* text, Rectangle<int> cell, bool showScale = false) {
+  caption(text, cell.withHeight(16), -1, 13.f);
   const int width = jmin(60, cell.getWidth());
-  addControl(id, Slider::RotaryHorizontalVerticalDrag, Rectangle<int>(cell.getCentreX() - width / 2, cell.getY() + 16, width, cell.getHeight() - 18), -1);
+  auto& control = addControl(id, Slider::RotaryHorizontalVerticalDrag,
+    {cell.getCentreX() - width / 2, cell.getY() + 15, width, jmin(54, cell.getHeight() - 18)}, -1);
+  if (showScale) addEffectScale(id, cell);
+  if (StringRef(id) == StringRef("gain")) control.slider.getProperties().set("faceDiameter", 44.f);
  }
  void addRowKnob(const char* id, const char* text, Rectangle<int> cell) {
   caption(text, cell.withHeight(16), 0);
   const int width = jmin(56, cell.getWidth());
-  addControl(id, Slider::RotaryHorizontalVerticalDrag, Rectangle<int>(cell.getCentreX() - width / 2, cell.getY() + 50, width, 56), 0);
+  auto& control = addControl(id, Slider::RotaryHorizontalVerticalDrag, Rectangle<int>(cell.getCentreX() - width / 2, cell.getY() + 26, width, 56), 0);
+  control.slider.getProperties().set("faceDiameter", 39.f);
+  auto* valueLabel = labels.add(new Label());
+  valueLabel->setFont(orbitui::legend(13.f)); valueLabel->setColour(Label::textColourId, orbitui::ink);
+  valueLabel->setJustificationType(Justification::centred); valueLabel->setInterceptsMouseClicks(false, false);
+  valueLabel->getProperties().set("live", true); // changes with the control: never printed in the rendered artwork
+  place(*valueLabel, {cell.getX(), cell.getY() + 77, cell.getWidth(), 14}, 0);
+  auto update = [valueLabel, slider = &control.slider] { auto text = slider->getTextFromValue(slider->getValue());
+   if (text.containsChar('(')) text = text.fromFirstOccurrenceOf("(", false, false).upToFirstOccurrenceOf(")", false, false);
+   valueLabel->setText(text, dontSendNotification); };
+  control.slider.onValueChange = update; update();
  }
  void addChoice(const char* id, const char* text, const StringArray& names, int page, Rectangle<int> cell, bool vertical, Colour colour = orbitui::neutral) {
+  if (vertical && names.size() == 2) { // a choice between two: a slide switch under its caption
+   caption(text, cell.withHeight(16), page);
+   place(*switches.add(new SlideSwitch(*orbit.state.getParameter(id), names)), {cell.getX(), cell.getY() + 22, cell.getWidth(), 52}, page);
+   return;
+  }
   auto* choice = choices.add(new ChoiceButtons(*orbit.state.getParameter(id), names, vertical, colour));
   if (vertical) { caption(text, cell.withHeight(16), page); place(*choice, Rectangle<int>(cell.getX() + 3, cell.getY() + 28, cell.getWidth() - 6, jmin(names.size() * 35, cell.getHeight() - 30)), page); }
   else { place(*choice, cell.withHeight(46).reduced(3, 0), page); caption(text, Rectangle<int>(cell.getX(), cell.getY() + 52, cell.getWidth(), 14), page, 11.f, orbitui::dim); }
  }
  void addWaveKnob(const char* id, const char* text, const StringArray& names, int page, Rectangle<int> cell, bool nameBelow = true) {
-  caption(text, cell.withHeight(16), page);
+  caption(text, cell.withHeight(16).translated(0, -5), page); // raised a little: a symbol sits right above the knob
   auto* selector = waveKnobs.add(new WaveKnob(orbit.state, id, names, nameBelow)); selector->setKnobColour(sectionColour);
-  place(*selector, {cell.getX(), cell.getY() + 26, cell.getWidth(), 104}, page);
+  place(*selector, {cell.getX(), cell.getY() + 12, cell.getWidth(), 80}, page); // knob centre level with the plain knobs of the row
  }
  // A small knob with its caption, for columns of the second row that stack two controls.
  void addMiniKnob(const char* id, const char* text, Rectangle<int> area) {
@@ -313,108 +494,160 @@ private:
   if (link->getValue() > .5f) { link->beginChangeGesture(); link->setValueNotifyingHost(0.f); link->endChangeGesture(); }
  }
  void addButton(TextButton& button, const String& text, Rectangle<int> bounds, Colour colour, int led) {
-  button.setButtonText(text); button.getProperties().set("led", led); orbitui::tint(button, colour); place(button, bounds, -1);
+  button.setButtonText(text); button.getProperties().set("led", led); button.getProperties().set("cream", true); // memory and utility keys keep light caps
+  orbitui::tint(button, colour); place(button, bounds, -1);
  }
 
  // ---- header: name, LED display, bank / patch memory, save / load, panel switch --------
  void buildHeader() {
   using namespace orbitui;
   refreshPresetMenu();
-  presets.setSelectedId(orbit.getCurrentProgram() + 1, dontSendNotification); place(presets, {300, 48, 300, 36}, -1);
+  presets.setSelectedId(orbit.getCurrentProgram() + 1, dontSendNotification); place(presets, {570, 30, 276, 32}, -1);
   presets.onChange = [this] {
    const int id = presets.getSelectedId();
    if (id >= 1000) { const int index = id - 1000; if (isPositiveAndBelow(index, userNames.size())) showResult(orbit.loadUserPreset(userNames[index])); }
    else if (id > 0) orbit.setCurrentProgram(id - 1);
   };
-  for (int i = 0; i < 3; ++i) { auto* button = bankButtons.add(new TextButton()); addButton(*button, String::charToString(juce_wchar('A' + i)), {622 + i * 48, 36, 43, 48}, neutral, 1); button->onClick = [this, i] { shownBank = i; timerCallback(); }; }
-  for (int i = 0; i < 8; ++i) { auto* button = patchButtons.add(new TextButton()); addButton(*button, String(i + 1), {782 + i * 48, 36, 43, 48}, i < 4 ? bright : neutral, 1); button->onClick = [this, i] { orbit.setCurrentProgram(shownBank * 8 + i); timerCallback(); }; }
-  addButton(saveButton, "SAVE", {1294, 48, 70, 36}, amber, 0); saveButton.onClick = [this] { saveDialog(); };
-  addButton(loadButton, "LOAD", {1370, 48, 70, 36}, neutral, 0);
+  for (int i = 0; i < 3; ++i) { auto* button = bankButtons.add(new TextButton()); addButton(*button, String::charToString(juce_wchar('A' + i)), {876 + i * 41, 24, 36, 38}, neutral, 1); button->onClick = [this, i] { shownBank = i; timerCallback(); }; }
+  for (int i = 0; i < 8; ++i) { auto* button = patchButtons.add(new TextButton()); addButton(*button, String(i + 1), {1024 + i * 39, 24, 34, 38}, i < 4 ? bright : neutral, 1); button->onClick = [this, i] { orbit.setCurrentProgram(shownBank * 8 + i); timerCallback(); }; }
+  addButton(saveButton, "SAVE", {1416, 30, 70, 32}, amber, 0); saveButton.onClick = [this] { saveDialog(); };
+  addButton(loadButton, "LOAD", {1494, 30, 70, 32}, neutral, 0);
   loadButton.onClick = [this] { refreshPresetMenu(); if (orbit.userPresetName().isNotEmpty()) showResult(orbit.loadUserPreset(orbit.userPresetName())); else orbit.setCurrentProgram(orbit.getCurrentProgram()); };
  }
 
 // ---- first row: the playing faders ------------------------------------------------------
  void buildPanelA() {
   using namespace orbitui;
-  Row row(*this, panelY, panelH, 0, 31.4f, 9);
-  auto cells = split(row.next("LFO", neutral, 3), {1, 1, 1});
-  addFader("rate", "RATE", 0, cells[0]); addFader("lfoDelay", "DELAY", 0, cells[1]); addFader("lfoPitch", "PITCH", 0, cells[2]);
-  cells = split(row.next("OSC I", amber, 5), {1, 1, 1, 1, 1});
-  addFader("wave", "SAW/PLS", 0, cells[0]); addFader("width", "WIDTH", 0, cells[1]); addFader("pwm", "PWM", 0, cells[2]); addFader("sub", "SUB", 0, cells[3]); addFader("noise", "NOISE", 0, cells[4]);
-  cells = split(row.next("OSC II", amber, 3), {1, 1, 1});
-  addFader("oscLayer", "LEVEL", 0, cells[0]); addFader("osc2Tune", "TUNE", 0, cells[1]); addFader("detune", "FINE", 0, cells[2]);
-  addFader("hpf", "0 - 3", 0, row.next("HPF", teal, 1)).slider.getProperties().set("marks", 3);
-  cells = split(row.next("FILTER", teal, 6.4f), {1, 1, 1, 1, 1, 1.4f});
-  addFader("cutoff", "FREQ", 0, cells[0]); addFader("resonance", "RES", 0, cells[1]); addFader("env", "ENV", 0, cells[2]); addFader("lfoFilter", "LFO", 0, cells[3]); addFader("keytrack", "KYBD", 0, cells[4]);
-  addChoice("slope", "SLOPE", {"12 dB", "24 dB"}, 0, cells[5], true);
-  addFader("velocity", "VEL", 0, row.next("AMP", teal, 1));
-  cells = split(row.next("ENV / AMP", neutral, 4), {1, 1, 1, 1});
-  addFader("attack", "A", 0, cells[0]); addFader("decay", "D", 0, cells[1]); addFader("sustain", "S", 0, cells[2]); addFader("release", "R", 0, cells[3]);
-  cells = split(row.next("ENV / FILTER", neutral, 5.4f), {1, 1, 1, 1, 1.4f});
+  // Controls are packed at a fixed pitch inside each section (one unit = one fader, 41 px); the width left over
+  // becomes bare panel between the sections, so every group reads as a block and the row still spans the panel.
+  const float unit = 41.f, total = 5.6f + 6.2f + 8.7f + 5.6f + 7.f; const int gutter = roundToInt((float(contentW) - total * unit) / 4.f);
+  int x = left;
+  auto next = [this, &x, unit, gutter](const char* title, Colour colour, float units) {
+   const Rectangle<int> area(x, panelY, roundToInt(units * unit), panelH); x += area.getWidth() + gutter;
+   sections.push_back({title, colour, area, 0}); sectionColour = colour; return area.withTrimmedTop(34);
+  };
+  // Small weights are spacers: a margin at the section's edge, or the gap between the faders and the knobs / switches.
+  auto cells = split(next("OSC I", amber, 5.6f), {.3f, 1, 1, 1, 1, 1, .3f});
+  addFader("wave", "SAW/PLS", 0, cells[1]); addFader("width", "WIDTH", 0, cells[2]); addFader("pwm", "PWM", 0, cells[3]); addFader("sub", "SUB", 0, cells[4]); addFader("noise", "NOISE", 0, cells[5]);
+  cells = split(next("OSC II", amber, 6.2f), {.3f, 1, 1, .5f, 1.7f, 1.7f});
+  addFader("oscLayer", "LEVEL", 0, cells[1]); addFader("osc2Width", "WIDTH", 0, cells[2]);
+  addRowKnob("osc2Tune", "TUNE", cells[4].withTrimmedTop(32)); addRowKnob("detune", "FINE", cells[5].withTrimmedTop(32));
+  cells = split(next("FILTER A", teal, 8.7f), {.3f, .8f, 1, 1, 1, 1, .9f, .5f, 2.2f});
+  addFader("hpf", "HPF", 0, cells[1]).slider.getProperties().set("marks", 3);
+  addFader("cutoff", "FREQ", 0, cells[2]); addFader("resonance", "RES", 0, cells[3]); addFader("env", "ENV", 0, cells[4]); addFader("lfoFilter", "LFO", 0, cells[5]); addFader("keytrack", "KYBD", 0, cells[6]);
+  addChoice("slope", "SLOPE", {"12 dB", "24 dB"}, 0, cells[8], true);
+  addChoice("filterAType", "MODEL", {"LADDER", "SVF"}, 0, cells[8].withTrimmedTop(100), true);
+  cells = split(next("ENV / AMP", amber, 5.6f), {.3f, 1, 1, 1, 1, 1, .3f});
+  addFader("attack", "A", 0, cells[1]); addFader("decay", "D", 0, cells[2]); addFader("sustain", "S", 0, cells[3]); addFader("release", "R", 0, cells[4]); addFader("velocity", "VEL", 0, cells[5]);
+  cells = split(next("ENV / FILTER", amber, 7.f), {.3f, 1, 1, 1, 1, .5f, 2.2f});
   const char* ids[] = {"fattack", "fdecay", "fsustain", "frelease"}; const char* names[] = {"A", "D", "S", "R"};
   // SOURCE says which envelope drives the filter: its OWN four faders, or a copy of the AMP envelope.
   // Grabbing one of the four faders while AMP is selected switches to OWN, so they always respond.
-  for (int i = 0; i < 4; ++i) { auto& fader = addFader(ids[i], names[i], 0, cells[size_t(i)]); fader.followsLink = true; fader.slider.onDragStart = [this] { useOwnFilterEnvelope(); }; }
-  addChoice("envLink", "SOURCE", {"OWN", "AMP"}, 0, cells[4], true);
-  cells = split(row.next("CHORUS", amber, 2.6f), {1, 1.6f});
-  addFader("chorus", "MIX", 0, cells[0]); addChoice("chorusMode", "MODE", {"OFF", "I", "II", "I+II"}, 0, cells[1], true, bright);
+  for (int i = 0; i < 4; ++i) { auto& fader = addFader(ids[i], names[i], 0, cells[size_t(i) + 1]); fader.followsLink = true; fader.slider.onDragStart = [this] { useOwnFilterEnvelope(); }; }
+  addChoice("envLink", "SOURCE", {"OWN", "AMP"}, 0, cells[6], true);
+  addChoice("envInvert", "POLARITY", {"NORM", "INV"}, 0, cells[6].withTrimmedTop(100), true);
  }
 
- // ---- second row: oscillator shapes, modulation, amplifier mode, second filter and routing ----
+ // ---- second row: oscillator shapes, modulation, second filter and routing ----
+ // Four blocks of two lines of controls, each as wide as its controls; the rest of the row is bare panel between them.
  void buildRowTwo() {
   using namespace orbitui;
-  const StringArray shapes{"MIX", "SAW", "PULSE", "TRI", "SINE"}, octaves{"-2", "-1", "0", "+1", "+2"}, models{"LADDER", "SVF"};
-  Row row(*this, row2Y, row2H, 0, 36.8f, 7);
-  auto cells = split(row.next("OSC I / SHAPE", amber, 5.7f), {2.2f, 2.2f, 1.3f});
-  addWaveKnob("osc1Shape", "WAVE", shapes, 0, cells[0]); addWaveKnob("osc1Octave", "OCTAVE", octaves, 0, cells[1], false);
-  addMiniKnob("osc1Level", "LEVEL", cells[2].withHeight(64)); addMiniKnob("crossMod", "X-MOD", cells[2].withTrimmedTop(68).withHeight(64));
-  cells = split(row.next("OSC II / SHAPE", amber, 5.7f), {2.2f, 2.2f, 1.3f});
-  addWaveKnob("osc2Shape", "WAVE", shapes, 0, cells[0]); addWaveKnob("osc2Octave", "OCTAVE", octaves, 0, cells[1], false);
-  addMiniKnob("osc2Width", "WIDTH", cells[2].withHeight(64)); caption("TO OSC I", cells[2].withTrimmedTop(68).withHeight(14), 0, 11.f, dim);
-  addToggle("oscSync", "SYNC", 0, {cells[2].getX() + 1, cells[2].getY() + 86, cells[2].getWidth() - 2, 30}, 2, neutral);
-  cells = split(row.next("LFO / MODULATION", neutral, 6.4f), {2.2f, 1.6f, 1.3f, 1.3f});
-  addWaveKnob("lfoShape", "WAVE", {"TRI", "SINE", "SAW", "SQUARE"}, 0, cells[0]); addChoice("pwmSource", "PWM BY", {"LFO", "MAN", "ENV"}, 0, cells[1], true);
-  addRowKnob("envPitch", "ENV>PITCH", cells[2]); addRowKnob("wheelDepth", "WHEEL", cells[3]);
-  cells = split(row.next("PLAY / AMP", neutral, 3.6f), {1, 1});
-  addChoice("legato", "ENVELOPE", {"RETRIG", "LEGATO"}, 0, cells[0], true); addChoice("vcaMode", "VCA", {"ENV", "GATE"}, 0, cells[1], true);
-  addToggle("hold", "HOLD", 0, {cells[0].getX() + 3, cells[0].getY() + 102, cells[0].getWidth() - 6, 28}, 2, teal);
-  cells = split(row.next("FILTER A", teal, 4.7f), {1.8f, 1.6f, 1.3f});
-  addChoice("filterAType", "MODEL", models, 0, cells[0], true); addChoice("envInvert", "ENV", {"NORM", "INV"}, 0, cells[1], true); addRowKnob("bendFilter", "BEND", cells[2]);
-  cells = split(row.next("FILTER B", teal, 7.2f), {1.8f, 1.5f, 1.3f, 1.3f, 1.3f});
-  addChoice("filterBType", "MODEL", models, 0, cells[0], true); addChoice("slopeB", "SLOPE", {"12 dB", "24 dB"}, 0, cells[1], true);
-  addRowKnob("cutoffB", "FREQ", cells[2]); addRowKnob("resonanceB", "RES", cells[3]); addRowKnob("envB", "ENV", cells[4]);
-  cells = split(row.next("ROUTING", teal, 3.5f), {2.2f, 1.3f});
-  addWaveKnob("filterRoute", "PATH", {"A", "B", "A>B", "B>A", "PAR"}, 0, cells[0], false); addRowKnob("filterBlend", "A/B MIX", cells[1]);
+  const StringArray shapes{"MIX", "SAW", "PULSE", "TRI", "SINE"}, octaves{"-2", "-1", "0", "+1", "+2"};
+  enum { oscW = 382, modW = 310, filterW = 252, routeW = 270, chorusW = 208, plain = 74, selector = 88 }; // plain knob and selector knob columns
+  const int gutter = (contentW - oscW - modW - filterW - routeW - chorusW) / 4; int x = left;
+  auto section = [this, &x, gutter](const char* title, Colour colour, int width) {
+   const Rectangle<int> bounds(x, row2Y, width, row2H); x += width + gutter;
+   sections.push_back({title, colour, bounds, 0}); sectionColour = colour; return bounds.withTrimmedTop(30);
+  };
+  const auto osc = section("OSC SHAPE", amber, oscW);
+  for (int i = 0; i < 2; ++i) {
+   const int y = osc.getY() + i * 110;
+   caption(i == 0 ? "OSC I" : "OSC II", {osc.getX() + 5, y + 44, 42, 26}, 0, 17, print);
+   labels.getLast()->setColour(Label::backgroundColourId, amber);
+   auto cells = split(Rectangle<int>(osc.getX() + 48, y, selector + selector + plain, 122), {float(selector), float(selector), float(plain)});
+   addWaveKnob(i == 0 ? "osc1Shape" : "osc2Shape", "WAVE", shapes, 0, cells[0]);
+   addWaveKnob(i == 0 ? "osc1Octave" : "osc2Octave", "OCTAVE", octaves, 0, cells[1], false);
+   if (i == 0) addRowKnob("osc1Level", "LEVEL", cells[2]);
+   else addRowKnob("crossMod", "X-MOD", cells[2]);
+  }
+  addToggle("oscSync", "SYNC", 0, {osc.getX() + 306, osc.getY() + 30, 70, 36}, 1, neutral);
+
+  const auto mod = section("LFO / MODULATION", teal, modW);
+  auto top = split(mod.withHeight(120), {float(plain), float(plain), float(selector), float(plain)});
+  addRowKnob("rate", "RATE", top[0]); addRowKnob("lfoDelay", "DELAY", top[1]);
+  addWaveKnob("lfoShape", "WAVE", {"TRI", "SINE", "SAW", "SQUARE"}, 0, top[2]);
+  addRowKnob("lfoPitch", "PITCH", top[3]);
+  auto bottom = split(mod.withTrimmedTop(110), {float(modW - 2 * plain), float(plain), float(plain)});
+  caption("PWM SOURCE", bottom[0].withHeight(16), 0);
+  addChoice("pwmSource", "", {"LFO", "MAN", "ENV"}, 0, bottom[0].withTrimmedTop(34), false);
+  addRowKnob("envPitch", "ENV>PITCH", bottom[1]); addRowKnob("wheelDepth", "WHEEL", bottom[2]);
+
+  const auto filter = section("FILTER B", teal, filterW);
+  auto cells = split(filter.withHeight(120), {float(filterW - 2 * plain), float(plain), float(plain)});
+  addChoice("filterBType", "MODEL", {"LADDER", "SVF"}, 0, cells[0], true);
+  addRowKnob("cutoffB", "FREQ", cells[1]); addRowKnob("resonanceB", "RES", cells[2]);
+  cells = split(filter.withTrimmedTop(110), {float(filterW - 2 * plain), float(plain), float(plain)});
+  addChoice("slopeB", "SLOPE", {"12 dB", "24 dB"}, 0, cells[0], true);
+  addRowKnob("envB", "ENV", cells[1]);
+
+  const auto route = section("ROUTING", teal, routeW);
+  caption("SIGNAL PATH", route.withHeight(16), 0);
+  addChoice("filterRoute", "", {"A", "B", "A>B", "B>A", "PAR"}, 0, route.withHeight(120).withTrimmedTop(24), false);
+  cells = split(route.withTrimmedTop(110), {float(plain), float(plain), float(routeW - 2 * plain)});
+  addRowKnob("bendFilter", "BEND", cells[0]);
+  addRowKnob("filterBlend", "A/B MIX", cells[1]);
+
+  // The chorus sits on the main panel, last block of the row, with orange caps of its own.
+  const auto chorus = section("CHORUS", amber, chorusW);
+  auto* chorusModes = choices.add(new ChoiceButtons(*orbit.state.getParameter("chorusMode"), {"OFF", "I", "II", "I+II"}, false, amber));
+  chorusModes->useColouredCaps(amber);
+  place(*chorusModes, chorus.withHeight(120).withTrimmedTop(22).withHeight(48).reduced(3, 0), 0);
+  cells = split(chorus.withTrimmedTop(110), {float(plain), float(chorusW - plain)});
+  addRowKnob("chorus", "MIX", cells[0]);
  }
 
  // ---- lower row: voices, glide, arpeggio, effects, output (always visible) ----------------
  void buildLowerRow() {
   using namespace orbitui;
-  Row row(*this, lowerY, lowerH, -1, 32.4f, 7);
-  auto cells = split(row.next("VOICES", neutral, 5.2f), {2, 3});
-  addChoice("mode", "POLYPHONY", {"6", "8"}, -1, cells[0], false); addChoice("voiceMode", "ASSIGN", {"POLY", "MONO", "UNI"}, -1, cells[1], false, bright);
-  cells = split(row.next("GLIDE / BEND", neutral, 3.6f), {1, 1, 1});
+  Row row(*this, lowerY, lowerH, -1, 25.8f, 7);
+  auto voices = row.next("VOICES", amber, 3.3f);
+  auto cells = split(voices.withHeight(74), {1, 1}); // two switches above, the assign keys and HOLD below
+  addChoice("mode", "COUNT", {"6", "8"}, -1, cells[0], true);
+  addChoice("vcaMode", "VCA", {"ENV", "GATE"}, -1, cells[1], true);
+  cells = split(voices.withTrimmedTop(80).withHeight(46), {3, 1.25f});
+  place(*choices.add(new ChoiceButtons(*orbit.state.getParameter("voiceMode"), {"POLY", "MONO", "UNI"}, false, neutral)), cells[0].reduced(2, 0), -1);
+  addToggle("hold", "HOLD", -1, cells[1].reduced(2, 0), 1, neutral);
+  auto glide = row.next("GLIDE", amber, 4.5f);
+  cells = split(glide, {1, 1, 1, 1.5f});
   addKnob("portamento", "PORTA", cells[0]); addKnob("bendRange", "BEND", cells[1]); addKnob("unisonSpread", "SPREAD", cells[2]);
-  cells = split(row.next("ARPEGGIO", teal, 11.8f), {1, 1, 4, 3, 2.4f, 1.3f, 1.3f});
-  addToggle("arpOn", "ON", -1, cells[0].withHeight(46).reduced(3, 0), 1, teal); addToggle("arpSync", "SYNC", -1, cells[1].withHeight(46).reduced(3, 0), 1, neutral);
-  caption("HOST", {cells[1].getX(), cells[1].getY() + 52, cells[1].getWidth(), 14}, -1, 11.f, dim);
-  addChoice("arpPattern", "MODE", {"UP", "DOWN", "U&D", "RND"}, -1, cells[2], false); addChoice("arpDivision", "STEP", {"1/4", "1/8", "1/16"}, -1, cells[3], false, bright); addChoice("arpOctaves", "OCTAVES", {"1", "2", "3"}, -1, cells[4], false);
-  addKnob("arpTempo", "TEMPO", cells[5]); addKnob("arpGate", "GATE", cells[6]);
+  addChoice("legato", "MODE", {"RETRIG", "LEGATO"}, -1, cells[3], true);
+  auto arp = row.next("ARPEGGIO", teal, 6.2f);
+  cells = split(arp.withHeight(48), {1, 1, 4});
+  addToggle("arpOn", "ON", -1, cells[0].withHeight(38), 1, neutral);
+  addToggle("arpSync", "SYNC", -1, cells[1].withHeight(38), 1, neutral);
+  addChoice("arpPattern", "", {"UP", "DOWN", "U&D", "RND"}, -1, cells[2].withHeight(38), false);
+  cells = split(arp.withTrimmedTop(52), {3, 2.4f, 1.2f, 1.2f});
+  addChoice("arpDivision", "STEP", {"1/4", "1/8", "1/16"}, -1, cells[0], false);
+  addChoice("arpOctaves", "OCT", {"1", "2", "3"}, -1, cells[1], false);
+  addKnob("arpTempo", "TEMPO", cells[2]); addKnob("arpGate", "GATE", cells[3]);
   addKnob("fxDrive", "AMOUNT", row.next("DRIVE", amber, 1.3f));
-  cells = split(row.next("DELAY", amber, 4.6f), {1, 1, 1, 1});
+  cells = split(row.next("DELAY", teal, 4.6f), {1, 1, 1, 1});
   // TIME shares its column with the sync selector: FREE uses the knob, a note value follows the tempo.
   caption("TIME", cells[0].withHeight(14), -1, 12.f);
   const int timeWidth = jmin(50, cells[0].getWidth());
-  delayTimeKnob = &addControl("delayTime", Slider::RotaryHorizontalVerticalDrag, Rectangle<int>(cells[0].getCentreX() - timeWidth / 2, cells[0].getY() + 13, timeWidth, 46), -1).slider;
-  place(*menuButtons.add(new ChoiceMenuButton(*orbit.state.getParameter("delaySync"))), {cells[0].getX() + 1, cells[0].getY() + 60, cells[0].getWidth() - 2, 24}, -1);
-  addKnob("delayFeedback", "FDBK", cells[1]); addKnob("delayMod", "MOD", cells[2]); addKnob("delayMix", "LEVEL", cells[3]);
-  // SIZE shares its column with the type selector (VINT / PLATE), as TIME does with the delay sync.
-  cells = split(row.next("REVERB", amber, 4.6f), {1, 1, 1, 1});
+  delayTimeKnob = &addControl("delayTime", Slider::RotaryHorizontalVerticalDrag, Rectangle<int>(cells[0].getCentreX() - timeWidth / 2, cells[0].getY() + 15, timeWidth, 54), -1).slider;
+  addEffectScale("delayTime", cells[0]);
+  place(*menuButtons.add(new ChoiceMenuButton(*orbit.state.getParameter("delaySync"))), {cells[0].getX() + 1, cells[0].getY() + 88, cells[0].getWidth() - 2, 24}, -1);
+  addKnob("delayFeedback", "FDBK", cells[1], true); addKnob("delayMod", "MOD", cells[2], true); addKnob("delayMix", "LEVEL", cells[3], true);
+  // The reverb type (VINT / PLATE / SPACE) is chosen on the keys under the four knobs.
+  cells = split(row.next("REVERB", teal, 4.6f), {1, 1, 1, 1});
   caption("SIZE", cells[0].withHeight(14), -1, 12.f);
   const int sizeWidth = jmin(50, cells[0].getWidth());
-  addControl("reverbSize", Slider::RotaryHorizontalVerticalDrag, Rectangle<int>(cells[0].getCentreX() - sizeWidth / 2, cells[0].getY() + 13, sizeWidth, 46), -1);
-  place(*menuButtons.add(new ChoiceMenuButton(*orbit.state.getParameter("reverbType"))), {cells[0].getX() + 1, cells[0].getY() + 60, cells[0].getWidth() - 2, 24}, -1);
-  addKnob("reverbDamp", "DAMP", cells[1]); addKnob("reverbColor", "COLOR", cells[2]); addKnob("reverbMix", "LEVEL", cells[3]);
+  addControl("reverbSize", Slider::RotaryHorizontalVerticalDrag, Rectangle<int>(cells[0].getCentreX() - sizeWidth / 2, cells[0].getY() + 15, sizeWidth, 54), -1);
+  addEffectScale("reverbSize", cells[0]);
+  const auto reverbArea = cells[0].getUnion(cells[3]); // the three reverbs on lit keys, across the foot of the section
+  place(*choices.add(new ChoiceButtons(*orbit.state.getParameter("reverbType"), {"VINT", "PLATE", "SPACE"}, false, neutral)), {reverbArea.getX() + 2, reverbArea.getY() + 80, reverbArea.getWidth() - 4, 44}, -1);
+  addKnob("reverbDamp", "DAMP", cells[1], true); addKnob("reverbColor", "COLOR", cells[2], true); addKnob("reverbMix", "LEVEL", cells[3], true);
   addKnob("gain", "VOLUME", row.next("OUTPUT", neutral, 1.3f));
  }
 
@@ -423,8 +656,8 @@ private:
   caption("KEYBOARD", {left, keysY + 28, 132, 16}, -1);
   addButton(octDown, "OCT -", {left + 10, keysY + 56, 53, 40}, neutral, 0); addButton(octUp, "OCT +", {left + 69, keysY + 56, 53, 40}, neutral, 0);
   octDown.onClick = [this] { octave = jmax(0, octave - 1); updateKeyboard(); }; octUp.onClick = [this] { octave = jmin(4, octave + 1); updateKeyboard(); };
-  keyboard.setScrollButtonsVisible(false); keyboard.setKeyWidth(1254.f / 36.f); keyboard.setOctaveForMiddleC(4); keyboard.setBlackNoteLengthProportion(.62f);
-  place(keyboard, {left + 146, keysY + 6, 1254, keysH - 6}, -1);
+  keyboard.setScrollButtonsVisible(false); keyboard.setKeyWidth(float(contentW - 146) / 36.f); keyboard.setOctaveForMiddleC(4); keyboard.setBlackNoteLengthProportion(.62f);
+  place(keyboard, {left + 146, keysY + 6, contentW - 146, keysH - 6}, -1);
   // Computer keyboard, AZERTY rows: Q S D F G H J K L M are the white keys starting on C,
   // Z E T Y U O P the black keys above them. OCT - / OCT + move the range.
   keyboard.clearKeyMappings();
@@ -432,31 +665,128 @@ private:
   for (int i = 0; keys[i] != 0; ++i) keyboard.setKeyPressForNote(KeyPress(keys[i], 0, 0), i);
   updateKeyboard();
  }
- void updateKeyboard() { keyboard.setAvailableRange(12 * (octave + 1), 12 * (octave + 1) + 60); keyboard.setKeyPressBaseOctave(octave + 1); surface.repaint(); }
+ void updateKeyboard() {
+  // Release every note held from the computer keyboard or the mouse before moving the range. Otherwise a key
+  // still down during the change is released as a different note, and the original one never stops.
+  keyboard.focusLost(Component::focusChangedDirectly);
+  keyboard.setAvailableRange(12 * (octave + 1), 12 * (octave + 1) + 60);
+  keyboard.setKeyPressBaseOctave(octave + 1); surface.repaint();
+ }
  void setPage(int index) { page = index; for (auto& entry : paged) entry.first->setVisible(entry.second == page); surface.repaint(); }
 
  // ---- painting -------------------------------------------------------------------------
  void paintSurface(Graphics& g) {
   using namespace orbitui;
-  g.fillAll(panel);
-  g.setColour(Colour(0xff3d4043)); g.drawHorizontalLine(0, 20, designW - 20);
-  for (int x : {0, designW - 20}) { ColourGradient cheek(Colour(0xff17181a), float(x), 0, Colour(0xff17181a), float(x + 20), 0, false); cheek.addColour(.45, Colour(0xff2d2f32)); g.setGradientFill(cheek); g.fillRect(x, 0, 20, int(designH)); }
-  g.setColour(ink); g.setFont(Font(FontOptions("Avenir Next Condensed", 52.f, Font::bold | Font::italic)).withExtraKerningFactor(.06f)); g.drawText("ORBIT", left, headerY + 2, 250, 50, Justification::centredLeft);
-  g.setColour(dim); g.setFont(face(11.f, false).withExtraKerningFactor(.2f)); g.drawText("PROGRAMMABLE POLYPHONIC SYNTHESIZER", left + 2, headerY + 56, 250, 14, Justification::centredLeft);
-  const Rectangle<float> window(300, 22, 300, 64);
-  g.setColour(Colour(0xff0a0b0b)); g.fillRoundedRectangle(window, 3); g.setColour(Colour(0xff3a3d40)); g.drawRoundedRectangle(window.reduced(.5f), 3, 1);
-  g.setColour(led.withAlpha(.75f)); g.setFont(mono(11.f)); g.drawText(displayLine, 314, 28, 276, 16, Justification::centredLeft);
-  g.setColour(dim); g.setFont(face(11.f)); g.drawText("BANK", 622, 20, 139, 14, Justification::centred); g.drawText("PATCH", 782, 20, 379, 14, Justification::centred);
-  g.setColour(amber); g.fillRect(left, int(lineY), contentW / 2, 3); g.setColour(teal); g.fillRect(left + contentW / 2, int(lineY), contentW / 2, 3);
-  g.setFont(face(14.f).withExtraKerningFactor(.14f));
+  if (skin.ready) { // rendered panel; only the texts that change are drawn over it
+   g.drawImage(skin.background, Rectangle<float>(0, 0, float(designW), float(designH)));
+   g.setColour(led.withAlpha(.75f)); g.setFont(mono(11.f)); g.drawText(displayLine, 580, 13, 260, 16, Justification::centredLeft);
+   g.setColour(dim); g.setFont(face(12.f, false)); g.drawText("C" + String(octave) + " - C" + String(octave + 5), left, keysY + 106, 132, 16, Justification::centred);
+   return;
+  }
+  g.setGradientFill(ColourGradient(Colour(0xff272a2b), 0, 0, Colour(0xff181b1d), 0, float(designH), false));
+  g.fillAll();
+  g.setTiledImageFill(panelGrain, 0, 0, 1.f); g.fillRect(16, 0, designW - 32, int(designH));
+  for (int seam : {int(lineY), row2Y - 10, lowerY - 10, keysY - 12}) {
+   g.setColour(Colours::black.withAlpha(.7f)); g.fillRect(16, seam, designW - 32, 3);
+   g.setColour(Colours::white.withAlpha(.15f)); g.drawHorizontalLine(seam + 3, 16, designW - 16);
+  }
+  // Slim walnut cheeks, deliberately quiet so the controls remain the focal point.
+  for (int x : {0, designW - 16}) {
+   ColourGradient wood(Colour(0xff261b16), float(x), 0, Colour(0xff3f3025), float(x + 12), 0, false);
+   wood.addColour(.45, Colour(0xff554434)); g.setGradientFill(wood); g.fillRect(x, 0, 16, int(designH));
+   g.setColour(Colour(0xff1c1714).withAlpha(.3f));
+   for (int i = 2; i < 16; i += 2) {
+    Path grain; grain.startNewSubPath(float(x + i), 0);
+    for (int y = 8; y <= designH; y += 8) grain.lineTo(float(x + i) + .6f * std::sin(float(y) * .025f + float(i)), float(y));
+    g.strokePath(grain, PathStrokeType(.6f));
+   }
+  }
+  g.setColour(Colours::white.withAlpha(.10f)); g.drawRoundedRectangle(17.f, 1.f, float(designW - 34), float(designH - 14), 5.f, 1.f);
+  g.setColour(ink); g.setFont(face(48.f, true).withExtraKerningFactor(.025f));
+  g.drawText("ORBIT", left, headerY + 2, 150, 50, Justification::centredLeft);
+  g.setColour(amber); g.drawText("106", left + 112, headerY + 2, 90, 50, Justification::centredLeft);
+  g.setColour(ink.withAlpha(.45f)); g.drawVerticalLine(left + 192, 20, 56);
+  g.setColour(dim); g.setFont(face(14.f, false).withExtraKerningFactor(.12f));
+  g.drawText("POLYPHONIC SYNTHESIZER", left + 202, headerY + 25, 270, 16, Justification::centredLeft);
+  const Rectangle<float> window(564, 10, 290, 56);
+  g.setColour(Colours::black.withAlpha(.35f)); g.fillRoundedRectangle(window.expanded(2), 4);
+  g.setGradientFill(ColourGradient(Colour(0xff080b0c), 0, 22, Colour(0xff191c1d), 0, 86, false)); g.fillRoundedRectangle(window, 3);
+  g.setColour(Colour(0xff454747)); g.drawRoundedRectangle(window, 3, .7f);
+  g.setColour(led.withAlpha(.8f)); g.setFont(mono(11.f)); g.drawText(displayLine, 580, 13, 260, 16, Justification::centredLeft);
+  g.setColour(dim); g.setFont(face(12.f)); g.drawText("BANK", 876, 7, 118, 14, Justification::centred); g.drawText("PATCH", 1024, 7, 307, 14, Justification::centred);
+  g.setColour(Colours::black.withAlpha(.4f)); g.drawHorizontalLine(lineY, 20, designW - 20);
+  g.setColour(Colours::white.withAlpha(.08f)); g.drawHorizontalLine(lineY + 1, 20, designW - 20);
   for (const auto& section : sections) {
    if (section.page >= 0 && section.page != page) continue;
-   const auto bar = section.area.withHeight(22);
-   g.setColour(section.colour); g.fillRect(bar); g.setColour(print); g.drawFittedText(section.title, bar.reduced(2, 0), Justification::centred, 1, .6f);
+   auto bar = section.area.withHeight(22);
+   if (section.area.getX() > left) {
+    g.setColour(ink.withAlpha(.16f));
+    g.drawVerticalLine(section.area.getX() - 7, float(section.area.getY() + 4), float(section.area.getBottom() - 8));
+   }
+   g.setFont(face(20.f).withExtraKerningFactor(.06f)); g.setColour(ink);
+   g.drawFittedText(section.title, bar.reduced(3, 0), Justification::centredLeft, 1, .75f);
+   g.setColour(section.colour.withAlpha(.85f)); g.fillRect(bar.getX(), bar.getBottom() + 2, bar.getWidth(), 2);
   }
-  g.setColour(Colour(0xff1a1b1d)); g.fillRoundedRectangle(float(left), float(keysY + 6), 132, float(keysH - 6), 3);
+  g.setColour(ink.withAlpha(.35f));
+  g.drawHorizontalLine(row2Y + 134, left + 4, left + 366);
+  g.drawVerticalLine(left + 378, float(row2Y + 38), float(row2Y + row2H - 6));
+  g.drawHorizontalLine(row2Y + 126, left + 1008, left + contentW);
+  g.setColour(Colours::black.withAlpha(.35f)); g.fillRect(20, keysY - 12, designW - 40, 10);
+  g.setColour(Colours::white.withAlpha(.08f)); g.drawHorizontalLine(keysY - 12, 20, designW - 20);
   g.setColour(dim); g.setFont(face(12.f, false)); g.drawText("C" + String(octave) + " - C" + String(octave + 5), left, keysY + 106, 132, 16, Justification::centred);
-  g.setColour(slot); g.fillRect(left + 146, int(keysY), 1254, 6);
+  g.setColour(slot); g.fillRect(left + 146, int(keysY), contentW - 146, 6);
+  g.setGradientFill(ColourGradient(Colour(0xff573d2b), 0, designH - 12.f, Colour(0xff281c15), 0, float(designH), false));
+  g.fillRect(16, designH - 12, designW - 32, 12);
+
+ }
+
+ // ---- layout export: tells tools/orbit_render.py where every control sits ----------------------
+ static String colourName(Colour colour) { using namespace orbitui; return colour == amber ? "amber" : colour == teal ? "teal" : colour == bright ? "bright" : colour == dim ? "dim" : colour == ink ? "ink" : "neutral"; }
+ static DynamicObject::Ptr boxed(Rectangle<int> r) { DynamicObject::Ptr item = new DynamicObject(); item->setProperty("x", r.getX()); item->setProperty("y", r.getY()); item->setProperty("w", r.getWidth()); item->setProperty("h", r.getHeight()); return item; }
+ void collect(Component& parent, Array<var>& texts, Array<var>& faderList, Array<var>& knobList, Array<var>& buttonList) {
+  for (auto* child : parent.getChildren()) {
+   if (!child->isVisible() || dynamic_cast<ComboBox*>(child) != nullptr || dynamic_cast<MidiKeyboardComponent*>(child) != nullptr) continue;
+   const auto area = surface.getLocalArea(child, child->getLocalBounds()); auto item = boxed(area);
+   if (auto* label = dynamic_cast<Label*>(child)) {
+    if (label->getProperties().contains("live")) continue; // a value readout: it would make the layout differ from one patch to the next
+    item->setProperty("text", label->getText()); item->setProperty("size", label->getFont().getHeight()); item->setProperty("colour", colourName(label->findColour(Label::textColourId))); texts.add(var(item.get()));
+   } else if (auto* slider = dynamic_cast<Slider*>(child)) {
+    if (slider->isRotary()) {
+     const bool selector = slider->getProperties().contains("selector"); const auto travel = slider->getRotaryParameters();
+     item->setProperty("cx", area.getCentreX()); item->setProperty("cy", area.getCentreY()); item->setProperty("d", jmin(area.getWidth(), area.getHeight()) - (selector ? 6 : 14));
+     item->setProperty("selector", selector); item->setProperty("start", travel.startAngleRadians); item->setProperty("end", travel.endAngleRadians);
+     item->setProperty("colour", colourName(slider->findColour(Slider::rotarySliderFillColourId))); knobList.add(var(item.get()));
+    } else { // the cap travels between top and bottom (the look-and-feel keeps 12 px clear at each end)
+     item->setProperty("cx", area.getCentreX()); item->setProperty("top", area.getY() + 12); item->setProperty("bottom", area.getBottom() - 12);
+     item->setProperty("marks", int(slider->getProperties().getWithDefault("marks", 10))); faderList.add(var(item.get()));
+    }
+   } else if (auto* button = dynamic_cast<TextButton*>(child)) {
+    const bool above = button->getProperties().contains("legendAbove");
+    if (above) { auto legend = boxed(area.withY(area.getY() - 18).withHeight(14)); legend->setProperty("text", button->getButtonText()); legend->setProperty("size", 13); legend->setProperty("colour", "ink"); texts.add(var(legend.get())); }
+    item->setProperty("text", button->getProperties().contains("liveText") || above ? String() : button->getButtonText()); item->setProperty("led", orbitui::ledMode(*button)); item->setProperty("dark", !button->getProperties().contains("cream")); item->setProperty("colour", colourName(button->findColour(TextButton::buttonColourId)));
+    item->setProperty("live", button->getProperties().contains("liveText")); buttonList.add(var(item.get()));
+   } else collect(*child, texts, faderList, knobList, buttonList);
+  }
+ }
+ void exportLayout() {
+  Array<var> sectionList, texts, faderList, knobList, buttonList;
+  for (const auto& section : sections) { auto item = boxed(section.area.withHeight(22)); item->setProperty("title", section.title); item->setProperty("colour", colourName(section.colour)); sectionList.add(var(item.get())); }
+  collect(surface, texts, faderList, knobList, buttonList);
+  for (const auto& fixed : {std::make_pair("BANK", Rectangle<int>(876, 7, 118, 14)), std::make_pair("PATCH", Rectangle<int>(1024, 7, 307, 14))}) { auto item = boxed(fixed.second); item->setProperty("text", fixed.first); item->setProperty("size", 11); item->setProperty("colour", "dim"); texts.add(var(item.get())); }
+  DynamicObject::Ptr root = new DynamicObject();
+  root->setProperty("width", int(designW)); root->setProperty("height", int(designH)); root->setProperty("left", int(left)); root->setProperty("contentWidth", int(contentW));
+  root->setProperty("headerY", int(headerY)); root->setProperty("accentY", int(lineY));
+  root->setProperty("display", var(boxed({564, 10, 290, 56}).get())); root->setProperty("keyboardBlock", var(boxed({left, keysY + 6, 132, keysH - 6}).get())); root->setProperty("keyboard", var(boxed({left + 146, keysY, contentW - 146, keysH}).get()));
+  Array<var> keyList; // every key of the on-screen keyboard, so that the rendered keys sit exactly under the playable ones
+  for (int note = keyboard.getRangeStart(); note <= keyboard.getRangeEnd(); ++note) {
+   const auto key = keyboard.getRectangleForKey(note).translated(float(keyboard.getX()), float(keyboard.getY()));
+   DynamicObject::Ptr item = new DynamicObject(); item->setProperty("x", key.getX()); item->setProperty("y", key.getY()); item->setProperty("w", key.getWidth()); item->setProperty("h", key.getHeight());
+   item->setProperty("black", MidiMessage::isMidiNoteBlack(note)); keyList.add(var(item.get()));
+  }
+  root->setProperty("keys", keyList);
+  root->setProperty("sections", sectionList); root->setProperty("labels", texts); root->setProperty("faders", faderList); root->setProperty("knobs", knobList); root->setProperty("buttons", buttonList);
+  const auto file = OrbitSkin::folder().getChildFile("layout.json"); const auto text = JSON::toString(var(root.get()));
+  if (file.loadFileAsString() != text) { file.getParentDirectory().createDirectory(); file.replaceWithText(text); }
  }
 
  // ---- presets ---------------------------------------------------------------------------
@@ -469,12 +799,18 @@ private:
  void showResult(const Result& result) { if (result.failed()) AlertWindow::showMessageBoxAsync(MessageBoxIconType::WarningIcon, "Preset", result.getErrorMessage()); }
  void saveDialog() {
   using orbitui::utf8;
-  auto* dialog = new AlertWindow("Enregistrer un preset", utf8("Enregistrement dans Application Support/SF Instruments/Orbit 106. Un nom existant est conservé."), MessageBoxIconType::NoIcon);
+  auto* dialog = new AlertWindow("Enregistrer un preset", utf8("Enregistrement dans Application Support/SF Instruments/Orbit 106. Un nom existant peut être remplacé après confirmation."), MessageBoxIconType::NoIcon);
   dialog->addTextEditor("name", orbit.userPresetName(), "Nom du preset");
   dialog->addButton("Enregistrer", 1, KeyPress(KeyPress::returnKey)); dialog->addButton("Annuler", 0, KeyPress(KeyPress::escapeKey));
   Component::SafePointer<Editor> safe(this);
   dialog->enterModalState(true, ModalCallbackFunction::create([safe, dialog](int result) {
-   if (result == 1 && safe) { const auto status = safe->orbit.saveUserPreset(dialog->getTextEditorContents("name").trim()); safe->showResult(status); if (status.wasOk()) safe->refreshPresetMenu(); }
+   if (result != 1 || !safe) return;
+    const String name = dialog->getTextEditorContents("name").trim();
+    const auto store = [safe, name](bool replace) { if (!safe) return; const auto status = safe->orbit.saveUserPreset(name, replace); safe->showResult(status); if (status.wasOk()) safe->refreshPresetMenu(); };
+    if (!safe->orbit.userPresetExists(name)) { store(false); return; }
+    AlertWindow::showAsync(MessageBoxOptions().withIconType(MessageBoxIconType::QuestionIcon).withTitle("Remplacer le preset ?")
+     .withMessage(utf8("Un preset « ") + name + utf8(" » existe déjà. Le remplacer par les réglages actuels ?")).withButton("Remplacer").withButton("Annuler").withAssociatedComponent(safe.getComponent()),
+     [store](int choice) { if (choice == 1) store(true); });
   }), true);
  }
 
@@ -489,7 +825,7 @@ private:
   else presets.setText("USER / " + userName, dontSendNotification);
   const bool eight = orbit.state.getRawParameterValue("mode")->load() > .5f;
   const String line = (user ? String("USER") : "BANK " + String::charToString(juce_wchar('A' + program / 8)) + " / " + String(program % 8 + 1)) + (eight ? "    8 VOICES" : "    6 VOICES") + (orbit.isPatchModified() ? "    EDITED" : "");
-  if (line != displayLine) { displayLine = line; surface.repaint(300, 22, 300, 26); }
+  if (line != displayLine) { displayLine = line; surface.repaint(564, 10, 290, 24); }
   // Standalone only: keep the typing keys on the piano keyboard. Inside a DAW the host keeps its own shortcuts.
   if (orbit.wrapperType == AudioProcessor::wrapperType_Standalone && isShowing() && Component::getCurrentlyFocusedComponent() == nullptr && Component::getCurrentlyModalComponent() == nullptr) keyboard.grabKeyboardFocus();
   if (delayTimeKnob != nullptr) delayTimeKnob->setAlpha(orbit.state.getRawParameterValue("delaySync")->load() > .5f ? .35f : 1.f); // the knob is idle while synced
@@ -497,9 +833,15 @@ private:
   for (auto* fader : faders) if (fader->followsLink) fader->slider.setAlpha(linked ? .4f : 1.f); // dimmed, but still grabbable
  }
 
- Orbit& orbit; OrbitLook look; Surface surface; PianoKeyboard keyboard;
+ Image panelGrain = [] {
+  Image tile(Image::ARGB, 256, 256, true); Random random(106);
+  for (int y = 0; y < 256; ++y) for (int x = 0; x < 256; ++x)
+   tile.setPixelAt(x, y, (random.nextBool() ? Colours::white : Colours::black).withAlpha(float(random.nextInt(8)) / 255.f));
+  return tile;
+ }();
+ Orbit& orbit; OrbitSkin skin; OrbitLook look; Surface surface; PianoKeyboard keyboard;
  std::vector<Section> sections; std::vector<std::pair<Component*, int>> paged;
- OwnedArray<Label> labels; OwnedArray<Fader> faders; OwnedArray<Toggle> toggles; OwnedArray<ChoiceButtons> choices; OwnedArray<WaveKnob> waveKnobs; OwnedArray<ChoiceMenuButton> menuButtons; Slider* delayTimeKnob = nullptr;
+ OwnedArray<Label> labels; OwnedArray<Fader> faders; OwnedArray<Toggle> toggles; OwnedArray<ChoiceButtons> choices; OwnedArray<WaveKnob> waveKnobs; OwnedArray<SlideSwitch> switches; OwnedArray<ChoiceMenuButton> menuButtons; Slider* delayTimeKnob = nullptr;
  OwnedArray<TextButton> bankButtons, patchButtons;
  ComboBox presets; TextButton saveButton, loadButton, octDown, octUp;
  StringArray userNames; String displayLine; Colour sectionColour{orbitui::neutral};

@@ -15,11 +15,13 @@ public:
   return juce::Result::ok();
  }
  static bool validName(const juce::String& name){return name.isNotEmpty() && name.length()<=64 && name==name.trim() && name.containsOnly("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -_");}
- juce::Result save(const juce::String& name,const juce::XmlElement& xml) const {
+ bool exists(const juce::String& name) const {return validName(name)&&directory().getChildFile(name+".orbitpreset").existsAsFile();}
+ // replace: overwrite an existing preset of that name (asked for explicitly); otherwise an existing name is refused.
+ juce::Result save(const juce::String& name,const juce::XmlElement& xml,bool replace=false) const {
   if(!validName(name))return juce::Result::fail(juce::String::fromUTF8("Nom : 1 à 64 lettres sans accents, chiffres, espaces, tirets ou underscores."));
   auto check=checkDirectory();if(check.failed())return check;
   auto file=directory().getChildFile(name+".orbitpreset");
-  std::error_code error;if(file.exists()||std::filesystem::is_symlink(file.getFullPathName().toStdString(),error))return juce::Result::fail(juce::String::fromUTF8("Ce nom existe déjà. Choisissez un nouveau nom pour conserver les deux versions."));
+  std::error_code error;const bool link=std::filesystem::is_symlink(file.getFullPathName().toStdString(),error);if(link||(file.exists()&&!(replace&&file.existsAsFile())))return juce::Result::fail(juce::String::fromUTF8("Ce nom existe déjà. Choisissez un nouveau nom pour conserver les deux versions."));
   auto created=directory().createDirectory();if(created.failed())return created;
   if(!file.replaceWithText(xml.toString()))return juce::Result::fail(juce::String::fromUTF8("Impossible d'écrire le preset dans le projet."));
   return juce::Result::ok();

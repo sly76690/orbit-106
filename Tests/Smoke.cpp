@@ -204,12 +204,14 @@ int main() {
   {auto reverbTail=[](float type){std::unique_ptr<juce::AudioProcessor> room(createPluginFilter());auto set=[&](const char* id,float v){for(auto* base:room->getParameters())if(auto* param=dynamic_cast<juce::RangedAudioParameter*>(base))if(param->paramID==id)param->setValueNotifyingHost(param->convertTo0to1(v));};
     set("chorus",0);set("release",.01f);set("reverbMix",.6f);set("reverbSize",1);set("reverbType",type);room->setRateAndBufferSizeDetails(48000,256);room->prepareToPlay(48000,256);
     std::vector<float> tail;juce::AudioBuffer<float> block(2,256);for(int n=0;n<600;++n){juce::MidiBuffer midi;if(n==0)midi.addEvent(juce::MidiMessage::noteOn(1,60,.8f),0);if(n==8)midi.addEvent(juce::MidiMessage::noteOff(1,60),0);room->processBlock(block,midi);if(n>=60)for(int i=0;i<256;++i){const float v=block.getSample(0,i);if(!std::isfinite(v)||std::abs(v)>1.001f)return std::vector<float>();tail.push_back(v);}}return tail;};
-   const auto hall=reverbTail(0),plate=reverbTail(1);if(hall.empty()||plate.empty()){std::cerr<<"Reverb output is not finite or bounded\n";return 57;}
+   const auto hall=reverbTail(0),plate=reverbTail(1),space=reverbTail(2);if(space.empty()||energy(space)<1e-6){std::cerr<<"Space reverb: no tail, or output not finite or bounded\n";return 67;}
+   {double d=0;for(size_t i=0;i<hall.size();++i)d+=std::abs(hall[i]-space[i]);if(d<.01){std::cerr<<"Space reverb is identical to the hall\n";return 68;}}
+   if(hall.empty()||plate.empty()){std::cerr<<"Reverb output is not finite or bounded\n";return 57;}
    if(energy(hall)<1e-6||energy(plate)<1e-6){std::cerr<<"A reverb has no tail: "<<energy(hall)<<" "<<energy(plate)<<"\n";return 58;}
    double typeDifference=0;for(size_t i=0;i<hall.size();++i)typeDifference+=std::abs(hall[i]-plate[i]);if(typeDifference<.01){std::cerr<<"The two reverbs are identical\n";return 59;}}
   if(diff(extendedRender({{"delayMix",.6f},{"delayTime",.05f},{"delayMod",0}}),extendedRender({{"delayMix",.6f},{"delayTime",.05f},{"delayMod",1}}))<.01){std::cerr<<"Delay modulation has no effect\n";return 60;}
   if(diff(extendedRender({{"delayMix",.6f},{"delaySync",0}}),extendedRender({{"delayMix",.6f},{"delaySync",9}}))<.01||diff(extendedRender({{"delayMix",.6f},{"delaySync",9}}),extendedRender({{"delayMix",.6f},{"delaySync",10}}))<.01){std::cerr<<"Delay tempo sync has no effect\n";return 62;}
-  for(float type:{0.f,1.f})if(diff(extendedRender({{"reverbMix",.6f},{"reverbType",type},{"reverbColor",0}}),extendedRender({{"reverbMix",.6f},{"reverbType",type},{"reverbColor",1}}))<.01){std::cerr<<"Reverb colour has no effect on type "<<type<<"\n";return 63;}
+  for(float type:{0.f,1.f,2.f})if(diff(extendedRender({{"reverbMix",.6f},{"reverbType",type},{"reverbColor",0}}),extendedRender({{"reverbMix",.6f},{"reverbType",type},{"reverbColor",1}}))<.01){std::cerr<<"Reverb colour has no effect on type "<<type<<"\n";return 63;}
   {auto loud=extendedRender({{"delayMix",.65f},{"delayTime",.05f},{"delayFeedback",1.1f}});for(float v:loud)if(!std::isfinite(v)||std::abs(v)>1.001f){std::cerr<<"Delay self-oscillation is not bounded\n";return 61;}}
   std::cout<<"PASS oscillator sync, cross modulation, patch change keeps level, hold, vintage and plate reverbs, delay modulation and feedback\n";
  }
@@ -226,4 +228,18 @@ int main() {
  std::function<juce::TextButton*(juce::Component&,const juce::String&)> findButton;
  findButton=[&](juce::Component& parent,const juce::String& text)->juce::TextButton*{for(int i=0;i<parent.getNumChildComponents();++i){auto* child=parent.getChildComponent(i);if(auto* button=dynamic_cast<juce::TextButton*>(child))if(button->getButtonText()==text)return button;if(auto* nested=findButton(*child,text))return nested;}return nullptr;};
  std::cout<<"PASS editor render in both voice modes\n";
+ // UI-only regression: resizing/rendering must not alter a patch or drop its live controls.
+ juce::MemoryBlock stateBefore; p->getStateInformation(stateBefore);
+ for (int width : {1280, 1600, 2400}) {
+  editor->setSize(width, width * 1000 / 1600);
+  auto rendered = editor->createComponentSnapshot(editor->getLocalBounds());
+  if (!rendered.isValid() || rendered.getWidth() != width) return 64;
+  juce::FileOutputStream preview(juce::File::getCurrentWorkingDirectory().getChildFile("interface-neo-" + juce::String(width) + ".png"));
+  preview.setPosition(0); preview.truncate();
+  if (!png.writeImageToStream(rendered, preview)) return 65;
+ }
+ juce::MemoryBlock stateAfter; p->getStateInformation(stateAfter);
+ if (stateBefore != stateAfter) { std::cerr << "UI resize changed patch state\n"; return 66; }
+ std::cout << "PASS UI at 1280, 1600 and 2400 pixels; unchanged patch state\n";
+
 }
