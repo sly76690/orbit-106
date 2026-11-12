@@ -228,6 +228,14 @@ int main() {
  std::function<juce::TextButton*(juce::Component&,const juce::String&)> findButton;
  findButton=[&](juce::Component& parent,const juce::String& text)->juce::TextButton*{for(int i=0;i<parent.getNumChildComponents();++i){auto* child=parent.getChildComponent(i);if(auto* button=dynamic_cast<juce::TextButton*>(child))if(button->getButtonText()==text)return button;if(auto* nested=findButton(*child,text))return nested;}return nullptr;};
  std::cout<<"PASS editor render in both voice modes\n";
+ // Eight-voice character: AGE and WIDTH must change the eight-voice sound and leave the six-voice one untouched.
+ {auto take=[&](float mode,float age,float width){return extendedRender({{"mode",mode},{"age",age},{"voiceWidth",width},{"chorus",0},{"chorusMode",0}});};
+  if(diff(take(1,0,0),take(1,1,0))<.01){std::cerr<<"AGE has no effect on the eight-voice instrument\n";return 69;}
+  if(diff(take(1,0,0),take(1,0,1))<.01){std::cerr<<"WIDTH has no effect on the eight-voice instrument\n";return 70;}
+  if(diff(extendedRender({{"mode",1},{"voiceDrive",0}}),extendedRender({{"mode",1},{"voiceDrive",1}}))<.01){std::cerr<<"PRE drive has no effect on the eight-voice instrument\n";return 72;}
+  if(diff(extendedRender({{"mode",0},{"voiceDrive",0}}),extendedRender({{"mode",0},{"voiceDrive",1}}))>1e-9){std::cerr<<"PRE drive changes the six-voice instrument\n";return 73;}
+  if(diff(take(0,0,0),take(0,1,1))>1e-9){std::cerr<<"AGE or WIDTH changes the six-voice instrument\n";return 71;}}
+ std::cout<<"PASS eight-voice age and width\n";
  // UI-only regression: resizing/rendering must not alter a patch or drop its live controls.
  juce::MemoryBlock stateBefore; p->getStateInformation(stateBefore);
  for (int width : {1280, 1600, 2400}) {

@@ -24,8 +24,10 @@ struct OrbitSkin {
  Image background, knob, fader, led; std::array<Image, 3> index; // index line in amber, teal, neutral
  bool ready = false;
  static File folder() { return Orbit::presetRoot().getChildFile("Skin"); }
- void load() {
-  const auto directory = folder(); const auto get = [&directory](const char* name) { return ImageFileFormat::loadFrom(directory.getChildFile(name)); };
+ // Where the installer puts the artwork for every user of the computer (/Library/Application Support/... on macOS).
+ static File sharedFolder() { return File::getSpecialLocation(File::commonApplicationDataDirectory).getChildFile("Application Support").getChildFile("SF Instruments").getChildFile("Orbit 106").getChildFile("Skin"); }
+ void load(const File& directory) {
+  const auto get = [&directory](const char* name) { return ImageFileFormat::loadFrom(directory.getChildFile(name)); };
   background = get("background.jpg"); knob = get("knob.png"); fader = get("fader.png"); led = get("led.png");
   index[0] = get("index_amber.png"); index[1] = get("index_teal.png"); index[2] = get("index_neutral.png");
   ready = background.isValid() && knob.isValid() && fader.isValid() && led.isValid() && index[0].isValid() && index[1].isValid() && index[2].isValid();
@@ -380,9 +382,15 @@ public:
   buildHeader(); buildPanelA(); buildRowTwo(); buildLowerRow(); buildKeyboard();
   setPage(0);
   // Rendered artwork: write the layout for tools/orbit_render.py, then use its pictures when they match this layout.
-  exportLayout(); skin.load();
-  // Pictures made for another layout would not sit under the controls: the renderer leaves a copy of the layout it used.
-  if (skin.ready && OrbitSkin::folder().getChildFile("layout.rendered.json").loadFileAsString() != OrbitSkin::folder().getChildFile("layout.json").loadFileAsString()) skin.ready = false;
+  // Pictures made for another layout would not sit under the controls: the renderer leaves a copy of the layout it
+  // used beside them, and they are only used while it matches. The user's own folder (fresh renders) comes first,
+  // then the folder filled by the installer.
+  const String layout = exportLayout().removeCharacters("\r");
+  for (const auto& directory : {OrbitSkin::folder(), OrbitSkin::sharedFolder()}) {
+   skin.load(directory);
+   if (skin.ready && directory.getChildFile("layout.rendered.json").loadFileAsString().removeCharacters("\r") == layout) break;
+   skin.ready = false;
+  }
   look.skin = &skin;
   if (skin.ready) {
    for (auto* label : labels) if (!label->getProperties().contains("live")) label->setVisible(false); // captions are printed on the rendered panel
@@ -437,7 +445,7 @@ private:
   const auto range = orbit.state.getParameter(id)->getNormalisableRange();
   ignoreUnused(range, id); // every knob reads 0 to 10: just the two ends of the scale, at the foot of the knob
   const int cx = cell.getCentreX(), y = cell.getY() + 67;
-  caption("0", {cx - 27, y - 5, 12, 10}, -1, 8.f, orbitui::dim); caption("10", {cx + 15, y - 5, 12, 10}, -1, 8.f, orbitui::dim); // kept inside the knob's own column
+  caption("0", {cx - 25, y - 5, 12, 10}, -1, 8.f, orbitui::dim); caption("10", {cx + 13, y - 5, 12, 10}, -1, 8.f, orbitui::dim); // kept inside the knob's own column
  }
  void addKnob(const char* id, const char* text, Rectangle<int> cell, bool showScale = false) {
   caption(text, cell.withHeight(16), -1, 13.f);
@@ -609,11 +617,12 @@ private:
  // ---- lower row: voices, glide, arpeggio, effects, output (always visible) ----------------
  void buildLowerRow() {
   using namespace orbitui;
-  Row row(*this, lowerY, lowerH, -1, 25.8f, 7);
-  auto voices = row.next("VOICES", amber, 3.3f);
-  auto cells = split(voices.withHeight(74), {1, 1}); // two switches above, the assign keys and HOLD below
+  Row row(*this, lowerY, lowerH, -1, 28.5f, 7);
+  auto voices = row.next("VOICES", amber, 4.9f);
+  auto cells = split(voices.withHeight(74), {1, 1, .8f, .8f}); // two switches and the eight-voice character above, the assign keys and HOLD below
   addChoice("mode", "COUNT", {"6", "8"}, -1, cells[0], true);
   addChoice("vcaMode", "VCA", {"ENV", "GATE"}, -1, cells[1], true);
+  addKnob("age", "AGE", cells[2]); addKnob("voiceWidth", "WIDTH", cells[3]); // act on the eight-voice instrument only
   cells = split(voices.withTrimmedTop(80).withHeight(46), {3, 1.25f});
   place(*choices.add(new ChoiceButtons(*orbit.state.getParameter("voiceMode"), {"POLY", "MONO", "UNI"}, false, neutral)), cells[0].reduced(2, 0), -1);
   addToggle("hold", "HOLD", -1, cells[1].reduced(2, 0), 1, neutral);
@@ -630,7 +639,8 @@ private:
   addChoice("arpDivision", "STEP", {"1/4", "1/8", "1/16"}, -1, cells[0], false);
   addChoice("arpOctaves", "OCT", {"1", "2", "3"}, -1, cells[1], false);
   addKnob("arpTempo", "TEMPO", cells[2]); addKnob("arpGate", "GATE", cells[3]);
-  addKnob("fxDrive", "AMOUNT", row.next("DRIVE", amber, 1.3f));
+  cells = split(row.next("DRIVE", amber, 2.4f), {1, 1}); // PRE: inside each voice, ahead of the filter (eight-voice instrument); POST: the whole output
+  addKnob("voiceDrive", "PRE", cells[0]); addKnob("fxDrive", "POST", cells[1]);
   cells = split(row.next("DELAY", teal, 4.6f), {1, 1, 1, 1});
   // TIME shares its column with the sync selector: FREE uses the knob, a note value follows the tempo.
   caption("TIME", cells[0].withHeight(14), -1, 12.f);
@@ -768,7 +778,7 @@ private:
    } else collect(*child, texts, faderList, knobList, buttonList);
   }
  }
- void exportLayout() {
+ String exportLayout() { // returns the layout text; also writes it for the renderer when the folder is writable
   Array<var> sectionList, texts, faderList, knobList, buttonList;
   for (const auto& section : sections) { auto item = boxed(section.area.withHeight(22)); item->setProperty("title", section.title); item->setProperty("colour", colourName(section.colour)); sectionList.add(var(item.get())); }
   collect(surface, texts, faderList, knobList, buttonList);
@@ -787,6 +797,7 @@ private:
   root->setProperty("sections", sectionList); root->setProperty("labels", texts); root->setProperty("faders", faderList); root->setProperty("knobs", knobList); root->setProperty("buttons", buttonList);
   const auto file = OrbitSkin::folder().getChildFile("layout.json"); const auto text = JSON::toString(var(root.get()));
   if (file.loadFileAsString() != text) { file.getParentDirectory().createDirectory(); file.replaceWithText(text); }
+  return text;
  }
 
  // ---- presets ---------------------------------------------------------------------------

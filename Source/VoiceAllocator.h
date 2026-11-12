@@ -2,7 +2,8 @@
 // Last-note priority across MIDI channels, fixed storage, sample-timed JUCE dispatch.
 class VoiceAllocator : public Synthesiser {
 public:
- explicit VoiceAllocator(AudioProcessorValueTreeState& s):state(s){setMinimumRenderingSubdivisionSize(1,true);}
+ // wide: this instrument spreads its voices across the stereo field (WIDTH), each voice keeping its own place.
+ explicit VoiceAllocator(AudioProcessorValueTreeState& s,bool spreadVoices=false):state(s),wide(spreadVoices){setMinimumRenderingSubdivisionSize(1,true);}
  void updateMode(){int next=int(value("voiceMode"));if(next!=mode){allNotesOff(0,false);mode=next;}}
  void noteOn(int channel,int note,float velocity) override {
   if(mode==0){for(auto* base:voices)static_cast<Voice*>(base)->setUnison(0,1);Synthesiser::noteOn(channel,note,velocity);for(auto* base:voices)if(base->isPlayingChannel(channel))base->controllerMoved(1,modWheel[size_t(channel-1)]);return;}
@@ -24,9 +25,18 @@ public:
  }
  void handlePitchWheel(int channel,int amount) override {if(mode==0)Synthesiser::handlePitchWheel(channel,amount);else if(active>=0&&active/128+1==channel)for(auto* v:voices)v->pitchWheelMoved(amount);}
 protected:
+ // The wide instrument hands notes to its voices in turn, so repeated notes do not always fall on the same voice
+ // (each one has its own small errors and its own place in the stereo field).
+ SynthesiserVoice* findFreeVoice(SynthesiserSound* sound,int channel,int note,bool steal) const override {
+  if(wide){const int n=voices.size();for(int k=0;k<n;++k){auto* voice=voices[(turn+k)%n];if(!voice->isVoiceActive()&&voice->canPlaySound(sound)){turn=(turn+k+1)%n;return voice;}}}
+  return Synthesiser::findFreeVoice(sound,channel,note,steal);
+ }
  void handleMidiEvent(const MidiMessage& message) override {if(message.isAllSoundOff()){allNotesOff(message.getChannel(),false);return;}Synthesiser::handleMidiEvent(message);}
  void renderVoices(AudioBuffer<float>& output,int start,int count)override {
   int n=mode==2?voices.size():1;for(int i=0;i<voices.size();++i)static_cast<Voice*>(voices[i])->setUnison(mode==2?(2.f*i/(n-1)-1)*value("unisonSpread"):0,mode==2?unisonGain(n):1.f);
+  static constexpr float places[8]={-.35f,.35f,-.7f,.7f,-.15f,.15f,-.9f,.9f}; // neighbours alternate sides; a single mono voice stays in the centre
+  const float width=wide&&mode!=1?value("voiceWidth"):0.f;
+  for(int i=0;i<voices.size();++i)static_cast<Voice*>(voices[i])->setPan(places[i%8]*width);
   Synthesiser::renderVoices(output,start,count);
  }
 private:
@@ -46,5 +56,5 @@ private:
    v->controllerMoved(1,modWheel[size_t(channel-1)]);
   }active=newest;
  }
- AudioProcessorValueTreeState& state;std::array<Key,2048> keys{};std::array<bool,16> sustain{};std::array<int,16> modWheel{};uint64 counter=0;int mode=-1,active=-1;
+ AudioProcessorValueTreeState& state;bool wide=false;mutable int turn=0;std::array<Key,2048> keys{};std::array<bool,16> sustain{};std::array<int,16> modWheel{};uint64 counter=0;int mode=-1,active=-1;
 };

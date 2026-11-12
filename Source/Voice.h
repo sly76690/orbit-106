@@ -44,6 +44,7 @@ class FilterSlot {
 public:
  void prepare(double sr) { sampleRate=float(sr); for(auto& f:svf){f.prepare({sr,512,1});f.setType(dsp::StateVariableTPTFilterType::lowpass);} reset(); }
  void reset() { ladder.fill(0.f); for(auto& f:svf)f.reset(); }
+ void setDrive(float amount) { drive=jmax(.2f,amount); } // how hard the ladder is pushed: more = earlier, rounder limiting
  void configure(int model,int slope,float resonance) { type=model; stages=slope; feedback=4.f*(.1f+.9f*resonance); for(auto& f:svf)f.setResonance(.7071f+resonance*7.f); }
  float process(float x,float cutoff) {
   if(type==0) return processLadder(x,cutoff);
@@ -63,17 +64,29 @@ private:
   for(size_t n=0;n<4;++n){const float v=(y-ladder[n])*G; y=v+ladder[n]; ladder[n]=y+v; if(n==1)tap=y;}
   return stages?y:tap;
  }
- static constexpr float drive=1.2f;
- std::array<float,4> ladder{}; std::array<dsp::StateVariableTPTFilter<float>,2> svf; float sampleRate=44100.f,feedback=.4f; int type=0,stages=1;
+ std::array<float,4> ladder{}; std::array<dsp::StateVariableTPTFilter<float>,2> svf; float sampleRate=44100.f,feedback=.4f,drive=1.2f; int type=0,stages=1;
 };
 class Voice : public SynthesiserVoice {
 public:
  Voice(AudioProcessorValueTreeState& s,double& previous,const ModulationBus& shared) : state(s),previousPitch(previous),bus(shared) {}
  bool canPlaySound(SynthesiserSound* s) override { return dynamic_cast<Sound*>(s)!=nullptr; }
  float p(const char* key) const {return state.getRawParameterValue(key)->load();}
- void envelopes(){env.setParameters({p("attack"),p("decay"),p("sustain"),p("release")});filterEnv.setParameters({p("fattack"),p("fdecay"),p("fsustain"),p("frelease")});gate.setParameters({.002f,.002f,1.f,.006f});}
- void retarget(int note,float velocity,int wheel){double current=pitch.getCurrentValue();hz=MidiMessage::getMidiNoteInHertz(note);pitch.reset(getSampleRate(),p("portamento"));pitch.setCurrentAndTargetValue(current);pitch.setTargetValue(hz);previousPitch=hz;vel=velocity;pitchWheelMoved(wheel);}
+ // Vintage voices (the eight-voice instrument): each voice is a slightly different circuit. AGE sets how different:
+ // a fixed error on each oscillator's tuning, on the filter cutoff and on the envelope times, plus a slow drift.
+ // The errors are fixed per voice and balanced: over the eight voices each one averages zero, so the instrument as a
+ // whole is neither flat nor dull, only uneven from one voice to the next.
+ void setVintage(int index){
+  static constexpr float tuning1[8]={.15f,-.55f,.8f,-.3f,.45f,-1.f,.65f,-.2f},tuning2[8]={-.35f,.6f,-.1f,.9f,-.75f,.25f,-.5f,-.05f};
+  static constexpr float cutoffs[8]={.2f,-.6f,.5f,-.9f,.75f,-.3f,.95f,-.6f},times[8]={-.4f,.7f,-.85f,.3f,.9f,-.6f,.15f,-.2f};
+  const int i=index&7;vintage=true;tune1=tuning1[i];tune2=tuning2[i];cutOffset=cutoffs[i];timeOffset=times[i];wander.setSeed(index*104729+5);}
+ // Vintage envelopes run faster up the keyboard and slower down it (15 % per octave around middle C).
+ void follow(int note){keyStretch=vintage?jlimit(.55f,1.6f,std::pow(keyFollow,float(note-60)/12.f)):1.f;}
+ void setPan(float position){pan=jlimit(-1.f,1.f,position);} // -1 left, 0 centre, 1 right
+ void envelopes(){const float stretch=vintage?(1.f+p("age")*envelopeError*timeOffset)*keyStretch:1.f;
+  env.setParameters({p("attack")*stretch,p("decay")*stretch,p("sustain"),p("release")*stretch});filterEnv.setParameters({p("fattack")*stretch,p("fdecay")*stretch,p("fsustain"),p("frelease")*stretch});gate.setParameters({.002f,.002f,1.f,.006f});}
+ void retarget(int note,float velocity,int wheel){follow(note);double current=pitch.getCurrentValue();hz=MidiMessage::getMidiNoteInHertz(note);pitch.reset(getSampleRate(),p("portamento"));pitch.setCurrentAndTargetValue(current);pitch.setTargetValue(hz);previousPitch=hz;vel=velocity;pitchWheelMoved(wheel);}
  void startNote(int note,float velocity,SynthesiserSound*,int wheel) override {
+  follow(note);punch=vintage?1.f:0.f;
   double from=voiceGain<1&&pitch.getCurrentValue()>0?pitch.getCurrentValue():previousPitch;hz=MidiMessage::getMidiNoteInHertz(note);pitch.reset(getSampleRate(),p("portamento"));pitch.setCurrentAndTargetValue(p("portamento")>.001f&&from>0?from:hz);pitch.setTargetValue(hz);previousPitch=hz;vel=velocity;pitchWheelMoved(wheel);
   a.reset();b.reset();highpass.reset();bass=0;env.reset();filterEnv.reset();gate.reset();envelopes();env.noteOn();filterEnv.noteOn();gate.noteOn();lfoAge=0;
  }
@@ -109,24 +122,41 @@ public:
   // The mod wheel vibrato is not delayed.
   const float lfoDelay=p("lfoDelay")*float(sr),lfoHold=lfoDelay*.6f,lfoRamp=jmax(1.f,lfoDelay*.4f);
   const float tracking=std::pow(float(hz/261.625565),p("keytrack"));
+  const float age=vintage?p("age"):0.f,cutSpread=std::pow(2.f,age*cutoffError*cutOffset),driftRate=1.f-std::exp(-1.f/(driftSeconds*float(sr)));
+  // Vintage mixer: PRE drive overloads the mixer ahead of the filter (slightly lopsided, so it adds even harmonics too)
+  // and pushes the ladder harder. Loud signals keep their level, quiet ones come up: the sound thickens.
+  const float grit=vintage?p("voiceDrive"):0.f,push=1.f+3.f*grit,lean=.15f*grit,leanOffset=std::tanh(lean),pushScale=1.f/std::tanh(push);
+  const float dcRate=1.f-std::exp(-MathConstants<float>::twoPi*10.f/float(sr)),punchDecay=std::exp(-1.f/(punchSeconds*float(sr)));
+  a.setDrive(1.2f+1.6f*grit);b.setDrive(1.2f+1.6f*grit);
+  // Equal-power placement; exactly 1 on both sides at the centre.
+  const float angle=(pan+1.f)*MathConstants<float>::pi*.25f,gainL=pan==0.f?1.f:1.41421356f*std::cos(angle),gainR=pan==0.f?1.f:1.41421356f*std::sin(angle);
   for(int i=0;i<count;++i){
    float e=env.getNextSample(),fe=filterEnv.getNextSample();if(linked)fe=e;
    const float open=gate.getNextSample(),amp=gated?open:e;
    const float lfoNow=bus.lfo[size_t(start+i)],modulation=lfoNow*(lfoDelay<1.f?1.f:jlimit(0.f,1.f,(lfoAge-lfoHold)/lfoRamp));
    if(lfoAge<1.e7f)lfoAge+=1.f;
    const double base=pitch.getNextValue()*bend/sr*std::pow(2.,(modulation*pitchDepth+lfoNow*wheelDepth+(sync?0.f:fe*envPitch))/12.);
-   const double dt=jlimit(.0000001,.45,base*ratio1),dt2=jlimit(.0000001,.45,base*ratio2*(sync?std::pow(2.,fe*envPitch/12.):1.));
+   double detune1=1.,detune2=1.;
+   if(age>0.f){ // each oscillator wanders slowly around its own small tuning error (cents turned into a ratio; exact enough this close to 1)
+    if(--driftCount<=0){driftTarget1=wander.nextFloat()*2-1;driftTarget2=wander.nextFloat()*2-1;driftCount=int(sr*(.4+1.2*wander.nextFloat()));}
+    drift1+=driftRate*(driftTarget1-drift1);drift2+=driftRate*(driftTarget2-drift2);
+    detune1=1.+age*(tuningError*tune1+driftCents*drift1)*.00057779;detune2=1.+age*(tuningError*tune2+driftCents*drift2)*.00057779;
+   }
+   const double dt=jlimit(.0000001,.45,base*ratio1*detune1),dt2=jlimit(.0000001,.45,base*ratio2*detune2*(sync?std::pow(2.,fe*envPitch/12.):1.));
    const double dtx=crossMod>0?jlimit(.0000001,.45,dt*(1.+crossMod*lastOsc2)):dt;
    const float pwmMove=pwmSource==0?.18f*pwmDepth*modulation:(pwmSource==2?.4f*pwmDepth*fe:0.f);
    float pwm=jlimit(.08f,.92f,width+pwmMove),pwm2=jlimit(.08f,.92f,(shape2==0?width:width2)+pwmMove);
    const float second=oscillator(shape2,phase2,dt2,pwm2,mix);lastOsc2=second;
    float sample=(level*oscillator(shape1,phase,dtx,pwm,mix)+layer*second)/(1+layer*.82f);
-   sample=.7f*sample+.3f*subLevel*wave(sub,dt*.5,.5f,1);sample+=noise*.2f*(random.nextFloat()*2-1);if(hpfMode>=2)sample=highpass.processSample(0,sample);else if(hpfMode==0){bass+=bassRate*(sample-bass);sample+=bassBoostGain*bass;}
-   float ca=jlimit(25.f,float(sr*.45),cutoff*tracking*bendCutoff*std::pow(2.f,fe*amount*polarity*6+modulation*filterDepth));
-   float cb=jlimit(25.f,float(sr*.45),cutoffB*tracking*bendCutoff*std::pow(2.f,fe*amountB*6+modulation*filterDepth));
+   sample=.7f*sample+.3f*subLevel*wave(sub,dt*.5,.5f,1);sample+=noise*.2f*(random.nextFloat()*2-1);
+   if(grit>0.f){sample=(std::tanh(push*sample+lean)-leanOffset)*pushScale;dc+=dcRate*(sample-dc);sample-=dc;} // the lopsided curve leaves a small offset: removed here
+   if(hpfMode>=2)sample=highpass.processSample(0,sample);else if(hpfMode==0){bass+=bassRate*(sample-bass);sample+=bassBoostGain*bass;}
+   punch*=punchDecay; // a few milliseconds of extra brightness and level at the start of each note: the percussive front
+   float ca=jlimit(25.f,float(sr*.45),(1.f+punchCutoff*punch)*cutoff*cutSpread*tracking*bendCutoff*std::pow(2.f,fe*amount*polarity*6+modulation*filterDepth));
+   float cb=jlimit(25.f,float(sr*.45),cutoffB*cutSpread*tracking*bendCutoff*std::pow(2.f,fe*amountB*6+modulation*filterDepth));
    switch(route){case 1:sample=b.process(sample,cb);break;case 2:sample=b.process(a.process(sample,ca),cb);break;case 3:sample=a.process(b.process(sample,cb),ca);break;case 4:sample=(1-blend)*a.process(sample,ca)+blend*b.process(sample,cb);break;default:sample=a.process(sample,ca);}
-   sample*=amp*(1-velocity+velocity*vel)*.18f*voiceGain;
-   for(int ch=0;ch<out.getNumChannels();++ch)out.addSample(ch,start+i,sample);
+   sample*=amp*(1-velocity+velocity*vel)*.18f*voiceGain*(1.f+punchLevel*punch);
+   for(int ch=0;ch<out.getNumChannels();++ch)out.addSample(ch,start+i,sample*(ch==0?gainL:(ch==1?gainR:1.f)));
    phase+=dtx;
    if(phase>=1.){phase-=std::floor(phase);if(sync)phase2=phase/dtx*dt2-dt2;} // restart II at the exact point inside the sample where I wrapped
    phase2+=dt2;phase2-=std::floor(phase2);sub+=dt*.5;sub-=std::floor(sub);
@@ -136,6 +166,12 @@ public:
 private:
  AudioProcessorValueTreeState& state;double& previousPitch;const ModulationBus& bus;SmoothedValue<double> pitch;Contour env,filterEnv,gate;FilterSlot a,b;dsp::StateVariableTPTFilter<float> highpass;Random random{12345};
  double phase=0,phase2=0,sub=0,hz=440;float vel=0,wheel=0,unisonCents=0,voiceGain=1,lfoAge=0,bass=0,lastOsc2=0;
+ bool vintage=false;float tune1=0,tune2=0,cutOffset=0,timeOffset=0,pan=0,drift1=0,drift2=0,driftTarget1=0,driftTarget2=0;int driftCount=0;Random wander{777};
+ // Vintage spread at AGE = 10, to adjust by ear: tuning error and drift in cents, cutoff error in octaves, envelope time error, drift smoothing.
+ float keyStretch=1,punch=0,dc=0;
+ // Vintage envelopes and attack, to adjust by ear: time ratio per octave, length of the punch, its share of cutoff and of level.
+ static constexpr float keyFollow=.85f,punchSeconds=.006f,punchCutoff=.4f,punchLevel=.25f;
+ static constexpr float tuningError=6.f,driftCents=4.f,cutoffError=.12f,envelopeError=.15f,driftSeconds=.6f;
  // Tuning values for the high-pass switch: starting points to adjust by ear, not hardware measurements.
  static constexpr float hpfLowHz=225.f,hpfHighHz=700.f,bassBoostHz=90.f,bassBoostGain=1.2f;int wheelValue=8192;
 };

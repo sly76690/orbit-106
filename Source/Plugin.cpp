@@ -19,8 +19,8 @@ class Orbit : public AudioProcessor, private AudioProcessorValueTreeState::Liste
 public:
  AudioProcessorValueTreeState state;
  MidiKeyboardState keyboard;
- Orbit() : AudioProcessor(BusesProperties().withOutput("Stereo",AudioChannelSet::stereo(),true)), state(*this,nullptr,"OrbitState",parameters()), synth(state), classic(state) {
-  for(int i=0;i<8;++i){auto* voice=new Voice(state,previousJupiter,modulation);voice->setNoiseSeed(1001+i);synth.addVoice(voice);} synth.addSound(new Sound()); synth.setNoteStealingEnabled(true);
+ Orbit() : AudioProcessor(BusesProperties().withOutput("Stereo",AudioChannelSet::stereo(),true)), state(*this,nullptr,"OrbitState",parameters()), synth(state,true), classic(state) {
+  for(int i=0;i<8;++i){auto* voice=new Voice(state,previousJupiter,modulation);voice->setNoiseSeed(1001+i);voice->setVintage(i);synth.addVoice(voice);} synth.addSound(new Sound()); synth.setNoteStealingEnabled(true);
   for(int i=0;i<6;++i){auto* voice=new Voice(state,previousClassic,modulation);voice->setNoiseSeed(2001+i);classic.addVoice(voice);} classic.addSound(new Sound());classic.setNoteStealingEnabled(true);
   for(auto* param:getParameters()) if(auto* identified=dynamic_cast<AudioProcessorParameterWithID*>(param)) state.addParameterListener(identified->paramID,this);
   state.state.setProperty("stateVersion",3,nullptr);
@@ -90,6 +90,7 @@ public:
   add("bendFilter","Pitch bend to filter (octaves)",0,3,0);
   choice("voiceMode","Voice mode",{"Poly","Mono","Unison"});
   l.add(std::make_unique<AudioParameterBool>(ParameterID{"legato",1},"Legato envelopes",false));
+  add("voiceDrive","Voice drive",0,1,.3f);add("age","Age",0,1,.3f);add("voiceWidth","Voice width",0,1,.5f);
   add("unisonSpread","Unison detune (cents)",0,40,12);add("bendRange","Pitch bend (semitones)",0,24,2);
   choice("filterRoute","Filter routing",{"A only","B only","A > B","B > A","Parallel"});
   choice("filterAType","Filter A model",{"Ladder","State variable"});
