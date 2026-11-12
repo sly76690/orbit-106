@@ -45,7 +45,7 @@ public:
  void prepare(double sr) { sampleRate=float(sr); for(auto& f:svf){f.prepare({sr,512,1});f.setType(dsp::StateVariableTPTFilterType::lowpass);} reset(); }
  void reset() { ladder.fill(0.f); for(auto& f:svf)f.reset(); }
  void setDrive(float amount) { drive=jmax(.2f,amount); } // how hard the ladder is pushed: more = earlier, rounder limiting
- void configure(int model,int slope,float resonance) { type=model; stages=slope; feedback=4.f*(.1f+.9f*resonance); for(auto& f:svf)f.setResonance(.7071f+resonance*7.f); }
+ void configure(int model,int slope,float resonance) { type=model; stages=slope; feedback=maxFeedback*std::pow(jlimit(0.f,1.f,resonance),resonanceCurve); for(auto& f:svf)f.setResonance(.7071f+resonance*7.f); }
  float process(float x,float cutoff) {
   if(type==0) return processLadder(x,cutoff);
   svf[0].setCutoffFrequency(cutoff); x=svf[0].processSample(0,x);
@@ -55,20 +55,30 @@ public:
 private:
  // Four one-pole stages in series with resonance fed back from the last one, solved without a
  // one-sample delay in the loop. The 12 dB setting taps the signal after the second stage.
+ // Voiced to stand next to the state-variable model: the same loudness, a cutoff that opens as far for the same
+ // setting (four poles are already 12 dB down at their own frequency, hence cutoffScale), a resonance that comes in
+ // early and sings at the top of its range, and the same soft output stage, so a strong peak growls instead of clipping.
  float processLadder(float x,float cutoff) {
-  const float g=std::tan(MathConstants<float>::pi*jmin(cutoff,sampleRate*.45f)/sampleRate), G=g/(1.f+g), keep=1.f-G, G2=G*G;
+  const float g=std::tan(MathConstants<float>::pi*jmin(cutoff*cutoffScale,sampleRate*.45f)/sampleRate), G=g/(1.f+g), keep=1.f-G, G2=G*G;
   const float pending=keep*(G2*G*ladder[0]+G2*ladder[1]+G*ladder[2]+ladder[3]);
-  float y=(x*(1.f+.5f*feedback)-feedback*pending)/(1.f+feedback*G2*G2);
+  // The signal enters at a low level so the saturation inside the loop only bites on the resonant peak (the
+  // resonance builds up instead of being flattened); the lows the resonance takes away are given back at the output.
+  float y=(x*inputLevel-feedback*pending)/(1.f+feedback*G2*G2);
   y=std::tanh(y*drive)/drive;
   float tap=0;
   for(size_t n=0;n<4;++n){const float v=(y-ladder[n])*G; y=v+ladder[n]; ladder[n]=y+v; if(n==1)tap=y;}
-  return stages?y:tap;
+  return std::tanh((stages?y:tap)/inputLevel*outputLevel*(1.f+bassReturn*feedback));
  }
  std::array<float,4> ladder{}; std::array<dsp::StateVariableTPTFilter<float>,2> svf; float sampleRate=44100.f,feedback=.4f,drive=1.2f; int type=0,stages=1;
+ // Ladder voicing, measured against the state-variable model and to adjust by ear.
+ static constexpr float inputLevel=.2f,outputLevel=1.8f,bassReturn=.8f,maxFeedback=4.05f,resonanceCurve=.45f,cutoffScale=2.f;
 };
+// What the voices of one instrument share for the glide: the pitch the most recent note is sounding at right now
+// (in Hz, part-way through its own glide if it has one), and a count of note starts that tells which note that is.
+struct GlideMemory { double pitch=0; uint64 starts=0; GlideMemory& operator=(double hz){pitch=hz;return *this;} };
 class Voice : public SynthesiserVoice {
 public:
- Voice(AudioProcessorValueTreeState& s,double& previous,const ModulationBus& shared) : state(s),previousPitch(previous),bus(shared) {}
+ Voice(AudioProcessorValueTreeState& s,GlideMemory& previous,const ModulationBus& shared) : state(s),previousPitch(previous),bus(shared) {}
  bool canPlaySound(SynthesiserSound* s) override { return dynamic_cast<Sound*>(s)!=nullptr; }
  float p(const char* key) const {return state.getRawParameterValue(key)->load();}
  // Vintage voices (the eight-voice instrument): each voice is a slightly different circuit. AGE sets how different:
@@ -84,10 +94,16 @@ public:
  void setPan(float position){pan=jlimit(-1.f,1.f,position);} // -1 left, 0 centre, 1 right
  void envelopes(){const float stretch=vintage?(1.f+p("age")*envelopeError*timeOffset)*keyStretch:1.f;
   env.setParameters({p("attack")*stretch,p("decay")*stretch,p("sustain"),p("release")*stretch});filterEnv.setParameters({p("fattack")*stretch,p("fdecay")*stretch,p("fsustain"),p("frelease")*stretch});gate.setParameters({.002f,.002f,1.f,.006f});}
- void retarget(int note,float velocity,int wheel){follow(note);double current=pitch.getCurrentValue();hz=MidiMessage::getMidiNoteInHertz(note);pitch.reset(getSampleRate(),p("portamento"));pitch.setCurrentAndTargetValue(current);pitch.setTargetValue(hz);previousPitch=hz;vel=velocity;pitchWheelMoved(wheel);}
+ void retarget(int note,float velocity,int wheel){follow(note);double current=pitch.getCurrentValue();hz=MidiMessage::getMidiNoteInHertz(note);pitch.reset(getSampleRate(),p("portamento"));pitch.setCurrentAndTargetValue(current);pitch.setTargetValue(std::log2(hz));serial=++previousPitch.starts;previousPitch.pitch=pitched?std::exp2(current):hz;vel=velocity;pitchWheelMoved(wheel);}
  void startNote(int note,float velocity,SynthesiserSound*,int wheel) override {
   follow(note);punch=vintage?1.f:0.f;
-  double from=voiceGain<1&&pitch.getCurrentValue()>0?pitch.getCurrentValue():previousPitch;hz=MidiMessage::getMidiNoteInHertz(note);pitch.reset(getSampleRate(),p("portamento"));pitch.setCurrentAndTargetValue(p("portamento")>.001f&&from>0?from:hz);pitch.setTargetValue(hz);previousPitch=hz;vel=velocity;pitchWheelMoved(wheel);
+  // The glide runs on the pitch (log2 of the frequency), so an octave takes the same time wherever it is on the keyboard.
+  // A new note glides from where the previous one is sounding at this instant, which this voice then keeps up to date
+  // while it glides itself: a note played twice in a row, or a fast run, carries the glide on instead of cutting it short.
+  double from=voiceGain<1&&pitched?std::exp2(pitch.getCurrentValue()):previousPitch.pitch;hz=MidiMessage::getMidiNoteInHertz(note);pitch.reset(getSampleRate(),p("portamento"));
+  const double origin=p("portamento")>.001f&&from>0?from:hz;pitch.setCurrentAndTargetValue(std::log2(origin));pitch.setTargetValue(std::log2(hz));serial=++previousPitch.starts;previousPitch.pitch=origin;pitched=true;
+  // A note taken over while it still sounds: what it was putting out fades over a few milliseconds instead of stopping dead.
+  tailL+=lastL;tailR+=lastR;lastL=lastR=0;fresh=true;vel=velocity;pitchWheelMoved(wheel);
   a.reset();b.reset();highpass.reset();bass=0;env.reset();filterEnv.reset();gate.reset();envelopes();env.noteOn();filterEnv.noteOn();gate.noteOn();lfoAge=0;
  }
  void stopNote(float,bool tail) override {env.noteOff();filterEnv.noteOff();gate.noteOff();if(!tail){env.reset();filterEnv.reset();gate.reset();clearCurrentNote();}}
@@ -100,7 +116,8 @@ public:
  static float wave(double t,double dt,float width,float mix){double saw=2*t-1-blep(t,dt);double pulse=(t<width?1.:-1.)+blep(t,dt)-blep(std::fmod(t+1-width,1.),dt);return float(saw*(1-mix)+pulse*mix);}
  static float oscillator(int shape,double t,double dt,float width,float mix){switch(shape){case 1:return wave(t,dt,width,0);case 2:return wave(t,dt,width,1);case 3:return float(2./MathConstants<double>::pi*std::asin(std::sin(t*MathConstants<double>::twoPi)));case 4:return float(std::sin(t*MathConstants<double>::twoPi));default:return wave(t,dt,width,mix);}}
  void renderNextBlock(AudioBuffer<float>& out,int start,int count) override {
-  if(!isVoiceActive())return;envelopes();const double sr=getSampleRate();
+  if(!isVoiceActive()){lastL=lastR=tailL=tailR=0;return;} // silent since the last block: nothing left to fade
+  envelopes();const double sr=getSampleRate();
   // High-pass switch: 0 = bass boost, 1 = flat, 2 and 3 = two fixed high-pass settings.
   const int hpfMode=int(p("hpf"));if(hpfMode>=2)highpass.setCutoffFrequency(hpfMode==2?hpfLowHz:hpfHighHz);
   const float bassRate=1.f-std::exp(-MathConstants<float>::twoPi*bassBoostHz/float(sr));
@@ -123,11 +140,18 @@ public:
   const float lfoDelay=p("lfoDelay")*float(sr),lfoHold=lfoDelay*.6f,lfoRamp=jmax(1.f,lfoDelay*.4f);
   const float tracking=std::pow(float(hz/261.625565),p("keytrack"));
   const float age=vintage?p("age"):0.f,cutSpread=std::pow(2.f,age*cutoffError*cutOffset),driftRate=1.f-std::exp(-1.f/(driftSeconds*float(sr)));
-  // Vintage mixer: PRE drive overloads the mixer ahead of the filter (slightly lopsided, so it adds even harmonics too)
-  // and pushes the ladder harder. Loud signals keep their level, quiet ones come up: the sound thickens.
-  const float grit=vintage?p("voiceDrive"):0.f,push=1.f+3.f*grit,lean=.15f*grit,leanOffset=std::tanh(lean),pushScale=1.f/std::tanh(push);
+  // PRE drive (eight-voice instrument): each voice is overloaded after its filters and ahead of its amplifier, on a
+  // slightly lopsided curve that adds even harmonics too. Placed after the filters, it never takes anything away from
+  // their resonance or their envelope sweep. Loud signals keep their level, quiet ones come up: the sound thickens.
+  const float grit=vintage?p("voiceDrive"):0.f,push=1.f+3.f*grit,lean=.15f*grit,leanOffset=std::tanh(lean);
+  // Quiet signals come up by (1 + PRE) only and peaks go down, so the voice keeps about the same loudness whatever PRE is set to.
+  // Blended in over the first quarter of the knob so that turning it up from zero is seamless.
+  const float pushScale=(1.f+grit)/push,driveMix=jmin(1.f,grit*4.f);
   const float dcRate=1.f-std::exp(-MathConstants<float>::twoPi*10.f/float(sr)),punchDecay=std::exp(-1.f/(punchSeconds*float(sr)));
-  a.setDrive(1.2f+1.6f*grit);b.setDrive(1.2f+1.6f*grit);
+  // Faders are read once per block: these follow them over a few milliseconds, so moving one while a note sounds
+  // glides instead of stepping. A new note starts on the current settings at once.
+  const float follow5ms=1.f-std::exp(-1.f/(.005f*float(sr))),tailDecay=std::exp(-1.f/(.004f*float(sr)));
+  if(fresh){cutNow=cutoff;cutBNow=cutoffB;levelNow=level;layerNow=layer;subNow=subLevel;noiseNow=noise;fresh=false;}
   // Equal-power placement; exactly 1 on both sides at the centre.
   const float angle=(pan+1.f)*MathConstants<float>::pi*.25f,gainL=pan==0.f?1.f:1.41421356f*std::cos(angle),gainR=pan==0.f?1.f:1.41421356f*std::sin(angle);
   for(int i=0;i<count;++i){
@@ -135,7 +159,10 @@ public:
    const float open=gate.getNextSample(),amp=gated?open:e;
    const float lfoNow=bus.lfo[size_t(start+i)],modulation=lfoNow*(lfoDelay<1.f?1.f:jlimit(0.f,1.f,(lfoAge-lfoHold)/lfoRamp));
    if(lfoAge<1.e7f)lfoAge+=1.f;
-   const double base=pitch.getNextValue()*bend/sr*std::pow(2.,(modulation*pitchDepth+lfoNow*wheelDepth+(sync?0.f:fe*envPitch))/12.);
+   cutNow+=follow5ms*(cutoff-cutNow);cutBNow+=follow5ms*(cutoffB-cutBNow);levelNow+=follow5ms*(level-levelNow);layerNow+=follow5ms*(layer-layerNow);subNow+=follow5ms*(subLevel-subNow);noiseNow+=follow5ms*(noise-noiseNow);
+   const bool gliding=pitch.isSmoothing();const double pitchNow=pitch.getNextValue(),frequency=gliding?std::exp2(pitchNow):hz; // exactly the note once the glide is over
+   if(serial==previousPitch.starts)previousPitch.pitch=frequency;
+   const double base=frequency*bend/sr*std::pow(2.,(modulation*pitchDepth+lfoNow*wheelDepth+(sync?0.f:fe*envPitch))/12.);
    double detune1=1.,detune2=1.;
    if(age>0.f){ // each oscillator wanders slowly around its own small tuning error (cents turned into a ratio; exact enough this close to 1)
     if(--driftCount<=0){driftTarget1=wander.nextFloat()*2-1;driftTarget2=wander.nextFloat()*2-1;driftCount=int(sr*(.4+1.2*wander.nextFloat()));}
@@ -147,16 +174,18 @@ public:
    const float pwmMove=pwmSource==0?.18f*pwmDepth*modulation:(pwmSource==2?.4f*pwmDepth*fe:0.f);
    float pwm=jlimit(.08f,.92f,width+pwmMove),pwm2=jlimit(.08f,.92f,(shape2==0?width:width2)+pwmMove);
    const float second=oscillator(shape2,phase2,dt2,pwm2,mix);lastOsc2=second;
-   float sample=(level*oscillator(shape1,phase,dtx,pwm,mix)+layer*second)/(1+layer*.82f);
-   sample=.7f*sample+.3f*subLevel*wave(sub,dt*.5,.5f,1);sample+=noise*.2f*(random.nextFloat()*2-1);
-   if(grit>0.f){sample=(std::tanh(push*sample+lean)-leanOffset)*pushScale;dc+=dcRate*(sample-dc);sample-=dc;} // the lopsided curve leaves a small offset: removed here
+   float sample=(levelNow*oscillator(shape1,phase,dtx,pwm,mix)+layerNow*second)/(1+layerNow*.82f);
+   sample=.7f*sample+.3f*subNow*wave(sub,dt*.5,.5f,1);sample+=noiseNow*.2f*(random.nextFloat()*2-1);
    if(hpfMode>=2)sample=highpass.processSample(0,sample);else if(hpfMode==0){bass+=bassRate*(sample-bass);sample+=bassBoostGain*bass;}
    punch*=punchDecay; // a few milliseconds of extra brightness and level at the start of each note: the percussive front
-   float ca=jlimit(25.f,float(sr*.45),(1.f+punchCutoff*punch)*cutoff*cutSpread*tracking*bendCutoff*std::pow(2.f,fe*amount*polarity*6+modulation*filterDepth));
-   float cb=jlimit(25.f,float(sr*.45),cutoffB*cutSpread*tracking*bendCutoff*std::pow(2.f,fe*amountB*6+modulation*filterDepth));
+   float ca=jlimit(25.f,float(sr*.45),(1.f+punchCutoff*punch)*cutNow*cutSpread*tracking*bendCutoff*std::pow(2.f,fe*amount*polarity*6+modulation*filterDepth));
+   float cb=jlimit(25.f,float(sr*.45),cutBNow*cutSpread*tracking*bendCutoff*std::pow(2.f,fe*amountB*6+modulation*filterDepth));
    switch(route){case 1:sample=b.process(sample,cb);break;case 2:sample=b.process(a.process(sample,ca),cb);break;case 3:sample=a.process(b.process(sample,cb),ca);break;case 4:sample=(1-blend)*a.process(sample,ca)+blend*b.process(sample,cb);break;default:sample=a.process(sample,ca);}
+   if(grit>0.f){sample+=driveMix*((std::tanh(push*sample+lean)-leanOffset)*pushScale-sample);dc+=dcRate*(sample-dc);sample-=dc;} // the lopsided curve leaves a small offset: removed here
+
    sample*=amp*(1-velocity+velocity*vel)*.18f*voiceGain*(1.f+punchLevel*punch);
-   for(int ch=0;ch<out.getNumChannels();++ch)out.addSample(ch,start+i,sample*(ch==0?gainL:(ch==1?gainR:1.f)));
+   lastL=sample*gainL;lastR=sample*gainR;tailL*=tailDecay;tailR*=tailDecay;
+   for(int ch=0;ch<out.getNumChannels();++ch)out.addSample(ch,start+i,ch==0?lastL+tailL:(ch==1?lastR+tailR:sample));
    phase+=dtx;
    if(phase>=1.){phase-=std::floor(phase);if(sync)phase2=phase/dtx*dt2-dt2;} // restart II at the exact point inside the sample where I wrapped
    phase2+=dt2;phase2-=std::floor(phase2);sub+=dt*.5;sub-=std::floor(sub);
@@ -164,7 +193,8 @@ public:
   }
  }
 private:
- AudioProcessorValueTreeState& state;double& previousPitch;const ModulationBus& bus;SmoothedValue<double> pitch;Contour env,filterEnv,gate;FilterSlot a,b;dsp::StateVariableTPTFilter<float> highpass;Random random{12345};
+ AudioProcessorValueTreeState& state;GlideMemory& previousPitch;uint64 serial=0;const ModulationBus& bus;SmoothedValue<double> pitch;Contour env,filterEnv,gate;FilterSlot a,b;dsp::StateVariableTPTFilter<float> highpass;Random random{12345};
+ float cutNow=0,cutBNow=0,levelNow=0,layerNow=0,subNow=0,noiseNow=0,lastL=0,lastR=0,tailL=0,tailR=0;bool fresh=true,pitched=false;
  double phase=0,phase2=0,sub=0,hz=440;float vel=0,wheel=0,unisonCents=0,voiceGain=1,lfoAge=0,bass=0,lastOsc2=0;
  bool vintage=false;float tune1=0,tune2=0,cutOffset=0,timeOffset=0,pan=0,drift1=0,drift2=0,driftTarget1=0,driftTarget2=0;int driftCount=0;Random wander{777};
  // Vintage spread at AGE = 10, to adjust by ear: tuning error and drift in cents, cutoff error in octaves, envelope time error, drift smoothing.

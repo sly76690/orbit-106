@@ -227,7 +227,7 @@ private:
  ModulationBus modulation;double lfoPhase=0;
  std::atomic<bool> modified{false};
  std::atomic<int> currentProgram{0};
- double previousClassic=0,previousJupiter=0,sampleRate=44100;Arpeggiator arp;CharacterDelay echo;OrbitReverb reverb;NoteHold hold;
+ GlideMemory previousClassic,previousJupiter;double sampleRate=44100;Arpeggiator arp;CharacterDelay echo;OrbitReverb reverb;NoteHold hold;
  VoiceAllocator synth,classic;EnsembleChorus chorus;SmoothedValue<float> gain;int lastMode=-1;
 };
 #include "Editor.h"
