@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OrbitState stateVersion="4" program="0" modified="0">
+  <PARAM id="mode" value="0.0"/>
+  <PARAM id="osc1Shape" value="0.0"/>
+  <PARAM id="oscLayer" value="0.0"/>
+  <PARAM id="wave" value="0.5"/>
+  <PARAM id="width" value="0.5"/>
+  <PARAM id="pwm" value="0.55"/>
+  <PARAM id="pwmSource" value="0.0"/>
+  <PARAM id="rate" value="0.8"/>
+  <PARAM id="sub" value="0.2"/>
+  <PARAM id="cutoff" value="3500.0"/>
+  <PARAM id="resonance" value="0.1"/>
+  <PARAM id="env" value="0.1"/>
+  <PARAM id="keytrack" value="0.5"/>
+  <PARAM id="attack" value="0.45"/>
+  <PARAM id="decay" value="1.0"/>
+  <PARAM id="sustain" value="0.9"/>
+  <PARAM id="release" value="1.2"/>
+  <PARAM id="chorusMode" value="2.0"/>
+  <PARAM id="chorus" value="0.7"/>
+  <PARAM id="hpfFreq" value="0.4"/>
+  <PARAM id="reverbMix" value="0.15"/>
+  <PARAM id="atFilter" value="0.25"/>
+  <PARAM id="atVolume" value="0.25"/>
+  <PARAM id="wheelDepth" value="0.25"/>
+</OrbitState>

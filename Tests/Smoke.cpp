@@ -113,7 +113,7 @@ int main() {
  std::cout<<"PASS state restore\n";
  // Host pages: the panel order for controllers such as Push, every parameter present once, short names.
  {auto* first=dynamic_cast<juce::RangedAudioParameter*>(p->getParameters()[0]);auto* ninth=dynamic_cast<juce::RangedAudioParameter*>(p->getParameters()[8]);
-  if(!first||first->paramID!="wave"||!ninth||ninth->paramID!="oscLayer"||p->getParameters().size()!=93)return 74;
+  if(!first||first->paramID!="wave"||!ninth||ninth->paramID!="oscLayer"||p->getParameters().size()!=96)return 74;
   for(auto* b:p->getParameters())if(b->getName(100).length()>12){std::cerr<<"Parameter name too long for a controller: "<<b->getName(100)<<"\n";return 75;}}
  std::cout<<"PASS host pages of eight with short names\n";
  p->setRateAndBufferSizeDetails(48000,256);p->prepareToPlay(48000,256);
@@ -266,6 +266,19 @@ int main() {
    {{{"lfoFilter",2},{"rate",3},{"lfoManual",1}},{{"lfoFilter",2},{"rate",3},{"lfoManual",1},{"lfoTrig",1}}},
    {{{"arpOn",1},{"arpDivision",2},{"arpGate",.5f}},{{"arpOn",1},{"arpDivision",3},{"arpGate",.5f}}},
    {{{"lfoFilter",2},{"rate",11}},{{"lfoFilter",2},{"rate",19}}}};
+  // Key pressure: the same note with and without a full channel pressure, for each new pressure destination.
+  for(const char* id:{"atVolume","atLfo","atDrive"}){
+   auto render=[&](bool pressed){std::unique_ptr<juce::AudioProcessor> q(createPluginFilter());
+    for(auto* b:q->getParameters())if(auto* r=dynamic_cast<juce::RangedAudioParameter*>(b)){if(r->paramID==id)r->setValueNotifyingHost(1.f);if(r->paramID=="lfoFilter"||r->paramID=="atFilter")r->setValueNotifyingHost(0.f);if(r->paramID=="rate")r->setValueNotifyingHost(r->convertTo0to1(4.f));}
+    q->setRateAndBufferSizeDetails(48000,256);q->prepareToPlay(48000,256);std::vector<float> out;
+    for(int k=0;k<120;++k){juce::AudioBuffer<float> b(2,256);b.clear();juce::MidiBuffer m;if(k==0){m.addEvent(juce::MidiMessage::noteOn(1,52,.9f),0);if(pressed)m.addEvent(juce::MidiMessage::channelPressureChange(1,127),1);}q->processBlock(b,m);for(int i=0;i<256;++i)out.push_back(b.getSample(0,i));}return out;};
+   if(diff(render(false),render(true))<.01){std::cerr<<"Pressure destination "<<id<<" has no effect\n";return 82;}}
+  // With every pressure knob at zero, pressing a key changes nothing (no vibrato from the wheel depth either).
+  {auto render=[&](bool pressed){std::unique_ptr<juce::AudioProcessor> q(createPluginFilter());
+    for(auto* b:q->getParameters())if(auto* r=dynamic_cast<juce::RangedAudioParameter*>(b)){if(r->paramID=="atFilter")r->setValueNotifyingHost(0.f);if(r->paramID=="wheelDepth")r->setValueNotifyingHost(1.f);}
+    q->setRateAndBufferSizeDetails(48000,256);q->prepareToPlay(48000,256);std::vector<float> out;
+    for(int k=0;k<120;++k){juce::AudioBuffer<float> b(2,256);b.clear();juce::MidiBuffer m;if(k==0){m.addEvent(juce::MidiMessage::noteOn(1,52,.9f),0);if(pressed)m.addEvent(juce::MidiMessage::channelPressureChange(1,127),1);}q->processBlock(b,m);for(int i=0;i<256;++i)out.push_back(b.getSample(0,i));}return out;};
+   if(diff(render(false),render(true))>1.e-4){std::cerr<<"Key pressure still moves the sound with every pressure knob at zero\n";return 83;}}
   int n=0;for(auto& pr:pairs){++n;std::initializer_list<std::pair<const char*,float>> dummy{};(void)dummy;
    auto render=[&](const std::vector<std::pair<const char*,float>>& v){std::unique_ptr<juce::AudioProcessor> q(createPluginFilter());
     for(auto& kv:v)for(auto* b:q->getParameters())if(auto* r=dynamic_cast<juce::RangedAudioParameter*>(b))if(r->paramID==kv.first)r->setValueNotifyingHost(r->convertTo0to1(kv.second));
@@ -297,5 +310,20 @@ int main() {
  juce::MemoryBlock stateAfter; p->getStateInformation(stateAfter);
  if (stateBefore != stateAfter) { std::cerr << "UI resize changed patch state\n"; return 66; }
  std::cout << "PASS UI at 1280, 1600 and 2400 pixels; unchanged patch state\n";
+ // The sounds shipped with the installer: every setting they name exists, and each one plays, cleanly and at a sane level.
+ {const auto folder=juce::File(__FILE__).getParentDirectory().getParentDirectory().getChildFile("Presets/Sounds");int count=0;
+  for(const auto& file:folder.findChildFiles(juce::File::findFiles,false,"*.orbitpreset")){++count;
+   auto xml=juce::XmlDocument::parse(file);if(!xml||!xml->hasTagName("OrbitState")){std::cerr<<"Sound unreadable: "<<file.getFileName()<<"\n";return 90;}
+   std::unique_ptr<juce::AudioProcessor> q(createPluginFilter());
+   for(auto* child:xml->getChildIterator()){bool known=false;for(auto* b:q->getParameters())if(auto* r=dynamic_cast<juce::RangedAudioParameter*>(b))if(r->paramID==child->getStringAttribute("id"))known=true;
+    if(!known){std::cerr<<"Sound "<<file.getFileName()<<" names an unknown setting: "<<child->getStringAttribute("id")<<"\n";return 91;}}
+   juce::MemoryBlock data;juce::AudioProcessor::copyXmlToBinary(*xml,data);q->setStateInformation(data.getData(),int(data.getSize()));
+   q->setRateAndBufferSizeDetails(48000,256);q->prepareToPlay(48000,256);double sum=0,peak=0;long n=0;
+   for(int k=0;k<500;++k){juce::AudioBuffer<float> b(2,256);b.clear();juce::MidiBuffer m;if(k==0)for(int note:{48,55,60,64})m.addEvent(juce::MidiMessage::noteOn(1,note,.8f),0);if(k==380)for(int note:{48,55,60,64})m.addEvent(juce::MidiMessage::noteOff(1,note),0);
+    q->processBlock(b,m);for(int c=0;c<2;++c)for(int i=0;i<256;++i){const double v=b.getSample(c,i);if(!std::isfinite(v)){std::cerr<<"Sound "<<file.getFileName()<<" not finite\n";return 92;}sum+=v*v;peak=std::max(peak,std::abs(v));++n;}}
+   const double rms=std::sqrt(sum/double(n));std::cout<<"  "<<file.getFileNameWithoutExtension()<<"  rms "<<juce::Decibels::gainToDecibels(rms)<<" dB  peak "<<juce::Decibels::gainToDecibels(peak)<<" dB\n";
+   if(rms<.003||peak>1.05){std::cerr<<"Sound "<<file.getFileName()<<" too quiet or clipping\n";return 93;}}
+  if(count==0){std::cerr<<"No sound found in "<<folder.getFullPathName()<<"\n";return 94;}
+  std::cout<<"PASS "<<count<<" shipped sounds\n";}
 
 }

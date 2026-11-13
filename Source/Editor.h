@@ -433,8 +433,17 @@ public:
   setResizeLimits(designW * 8 / 10, designH * 8 / 10, designW * 3 / 2, designH * 3 / 2);
   setSize(designW * 9 / 10, designH * 9 / 10);
   timerCallback(); startTimerHz(12);
+  forceMonitor = orbitforce::start([safe = Component::SafePointer<Editor>(this)](float pressure, int stage) { if (safe != nullptr) safe->trackpadPressure(pressure, stage); });
  }
- ~Editor() override { stopTimer(); setLookAndFeel(nullptr); }
+ // Force Touch trackpad: pressing harder than a click on the panel keyboard sends key pressure (a deep click is full
+ // pressure), so PRESS and the other pressure knobs can be tried without a MIDI keyboard.
+ void trackpadPressure(float pressure, int stage) {
+  const bool playing = keyboard.isMouseButtonDown();
+  const float amount = !playing || stage < 1 ? 0.f : stage >= 2 ? 1.f : jlimit(0.f, 1.f, (pressure - .1f) / .9f);
+  const int value = roundToInt(amount * 127.f);
+  if (value != sentPressure) { sentPressure = value; orbit.screenPressure.store(value); }
+ }
+ ~Editor() override { orbitforce::stop(forceMonitor); stopTimer(); setLookAndFeel(nullptr); }
  void paint(Graphics& g) override { g.fillAll(Colours::black); }
  void resized() override { surface.setTransform(AffineTransform::scale(float(getWidth()) / float(designW))); }
 
@@ -554,7 +563,8 @@ private:
   presets.setSelectedId(orbit.getCurrentProgram() + 1, dontSendNotification); place(presets, {570, 30, 276, 32}, -1);
   presets.onChange = [this] {
    const int id = presets.getSelectedId();
-   if (id >= 1000) { const int index = id - 1000; if (isPositiveAndBelow(index, userNames.size())) showResult(orbit.loadUserPreset(userNames[index])); }
+   if (id >= 2000) { const int index = id - 2000; if (isPositiveAndBelow(index, soundNames.size())) showResult(orbit.loadSound(soundNames[index])); }
+   else if (id >= 1000) { const int index = id - 1000; if (isPositiveAndBelow(index, userNames.size())) showResult(orbit.loadUserPreset(userNames[index])); }
    else if (id > 0) orbit.setCurrentProgram(id - 1);
   };
   for (int i = 0; i < 3; ++i) { auto* button = bankButtons.add(new TextButton()); addButton(*button, String::charToString(juce_wchar('A' + i)), {876 + i * 41, 24, 36, 38}, neutral, 1); button->onClick = [this, i] { shownBank = i; timerCallback(); }; }
@@ -562,7 +572,7 @@ private:
   addButton(saveButton, "SAVE", {1416, 30, 70, 32}, amber, 0); saveButton.onClick = [this] { saveDialog(); };
   addButton(midiButton, "MIDI", {1344, 18, 60, 44}, neutral, 1); midiButton.onClick = [this] { midiMenu(); }; // MIDI learn
   addButton(loadButton, "LOAD", {1494, 30, 70, 32}, neutral, 0);
-  loadButton.onClick = [this] { refreshPresetMenu(); if (orbit.userPresetName().isNotEmpty()) showResult(orbit.loadUserPreset(orbit.userPresetName())); else orbit.setCurrentProgram(orbit.getCurrentProgram()); };
+  loadButton.onClick = [this] { refreshPresetMenu(); if (orbit.soundName().isNotEmpty()) showResult(orbit.loadSound(orbit.soundName())); else if (orbit.userPresetName().isNotEmpty()) showResult(orbit.loadUserPreset(orbit.userPresetName())); else orbit.setCurrentProgram(orbit.getCurrentProgram()); };
  }
 
 // ---- first row: the playing faders ------------------------------------------------------
@@ -646,14 +656,18 @@ private:
   cells = split(filter.withTrimmedTop(110), {float(filterW - 2 * plain), float(plain), float(plain)});
   addChoice("slopeB", "SLOPE", {"12 dB", "24 dB"}, 0, cells[0], true);
   addRowKnob("envB", "ENV", cells[1]);
+  addRowKnob("filterBlend", "A/B MIX", cells[2]); // the PAR balance, how much of B
 
   const auto route = section("ROUTING", teal, routeW);
   caption("SIGNAL PATH", route.withHeight(16), 0);
   addChoice("filterRoute", "", {"A", "B", "A>B", "B>A", "PAR"}, 0, route.withHeight(120).withTrimmedTop(24), false);
-  cells = split(route.withTrimmedTop(110), {float(plain), float(plain), float(plain), float(routeW - 3 * plain)});
+  cells = split(route.withTrimmedTop(110), {float(plain), float(routeW - plain)});
   addRowKnob("bendFilter", "BEND", cells[0]);
-  addRowKnob("filterBlend", "A/B MIX", cells[1]);
-  addRowKnob("atFilter", "PRESS", cells[2]); // key pressure opens both filters, as the bender does with BEND
+  // Key pressure (aftertouch): opens both filters, lifts the level, adds LFO on the filters, pushes the drive.
+  caption("PRESSURE", cells[1].withHeight(16), 0);
+  const auto pressCells = split(cells[1].withTrimmedTop(18), {1, 1, 1, 1});
+  addMiniKnob("atFilter", "FILTER", pressCells[0]); addMiniKnob("atVolume", "VOL", pressCells[1]);
+  addMiniKnob("atLfo", "LFO", pressCells[2]); addMiniKnob("atDrive", "DRIVE", pressCells[3]);
 
   // The chorus sits on the main panel, last block of the row, with orange caps of its own.
   // CHORUS above DRIVE, stacked in the last column of the row like FILTER B and ROUTING.
@@ -869,6 +883,8 @@ private:
  void refreshPresetMenu() {
   presets.clear(dontSendNotification); presets.addSectionHeading("FACTORY");
   for (int i = 0; i < orbit.getNumPrograms(); ++i) presets.addItem(orbit.getProgramName(i), i + 1);
+  soundNames = orbit.soundNames(); // the sounds shipped with Orbit
+  if (!soundNames.isEmpty()) { presets.addSeparator(); presets.addSectionHeading("SOUNDS"); for (int i = 0; i < soundNames.size(); ++i) presets.addItem("SOUND / " + soundNames[i], 2000 + i); }
   userNames = orbit.userPresetNames();
   if (!userNames.isEmpty()) { presets.addSeparator(); presets.addSectionHeading("USER"); for (int i = 0; i < userNames.size(); ++i) presets.addItem("USER / " + userNames[i], 1000 + i); }
  }
@@ -909,15 +925,16 @@ private:
 
  // Follows state the host or a preset can change behind the panel's back.
  void timerCallback() override {
-  const int program = orbit.getCurrentProgram(); const auto userName = orbit.userPresetName(); const bool user = userName.isNotEmpty();
+  const int program = orbit.getCurrentProgram(); const auto userName = orbit.userPresetName(), sound = orbit.soundName(); const bool user = userName.isNotEmpty() || sound.isNotEmpty();
   if (program != lastProgram) { lastProgram = program; shownBank = program / 8; }
   for (int i = 0; i < patchButtons.size(); ++i) patchButtons[i]->setToggleState(!user && shownBank * 8 + i == program, dontSendNotification);
   for (int i = 0; i < bankButtons.size(); ++i) bankButtons[i]->setToggleState(i == shownBank, dontSendNotification);
-  if (!user) presets.setSelectedId(program + 1, dontSendNotification);
+  if (sound.isNotEmpty()) { if (const int index = soundNames.indexOf(sound); index >= 0) presets.setSelectedId(2000 + index, dontSendNotification); else presets.setText("SOUND / " + sound, dontSendNotification); }
+  else if (!user) presets.setSelectedId(program + 1, dontSendNotification);
   else if (const int index = userNames.indexOf(userName); index >= 0) presets.setSelectedId(1000 + index, dontSendNotification);
   else presets.setText("USER / " + userName, dontSendNotification);
   const bool eight = orbit.state.getRawParameterValue("mode")->load() > .5f;
-  const String line = (user ? String("USER") : "BANK " + String::charToString(juce_wchar('A' + program / 8)) + " / " + String(program % 8 + 1)) + (eight ? "    8 VOICES" : "    6 VOICES") + (orbit.isPatchModified() ? "    EDITED" : "");
+  const String line = (sound.isNotEmpty() ? String("SOUND") : user ? String("USER") : "BANK " + String::charToString(juce_wchar('A' + program / 8)) + " / " + String(program % 8 + 1)) + (eight ? "    8 VOICES" : "    6 VOICES") + (orbit.isPatchModified() ? "    EDITED" : "");
   midiButton.setToggleState(orbit.isLearning(), dontSendNotification);
   String shown = line;
   if (orbit.isLearning()) { const int touched = orbit.lastTouchedParameter();
@@ -950,7 +967,7 @@ private:
  struct Sync { std::unique_ptr<SyncKey> key; std::unique_ptr<SyncKnob> knob; Slider* free = nullptr; Label* value = nullptr; const char* id = ""; bool wasSynced = true; };
  OwnedArray<Sync> syncs;
  OwnedArray<TextButton> bankButtons, patchButtons;
- ComboBox presets; TextButton saveButton, loadButton, octDown, octUp, midiButton, lfoTrigButton; bool lfoTrigDown = false;
- StringArray userNames; String displayLine; Colour sectionColour{orbitui::neutral};
+ ComboBox presets; TextButton saveButton, loadButton, octDown, octUp, midiButton, lfoTrigButton; bool lfoTrigDown = false; void* forceMonitor = nullptr; int sentPressure = 0;
+ StringArray userNames, soundNames; String displayLine; Colour sectionColour{orbitui::neutral};
  int page = 0, octave = 2, shownBank = 0, lastProgram = -1;
 };

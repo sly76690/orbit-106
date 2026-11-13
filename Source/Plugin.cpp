@@ -10,6 +10,7 @@ using namespace juce;
 #include "Reverbs.h"
 #include "CharacterDelay.h"
 #include "NoteHold.h"
+#include "ForceTouch.h"
 class Orbit;
 struct Sound : SynthesiserSound {
  bool appliesToNote(int) override { return true; }
@@ -33,9 +34,15 @@ public:
  // User presets live in the user's library, so they survive moving or rebuilding the project.
  static File presetRoot(){return File::getSpecialLocation(File::userApplicationDataDirectory).getChildFile("Application Support").getChildFile("SF Instruments").getChildFile("Orbit 106");}
  StringArray userPresetNames() const {return PresetStorage(presetRoot()).names();}
+ // Sounds: complete presets shipped by the installer (shared library), plus any the user drops in their own Presets/Sounds.
+ static File sharedRoot(){return File::getSpecialLocation(File::commonApplicationDataDirectory).getChildFile("Application Support").getChildFile("SF Instruments").getChildFile("Orbit 106");}
+ String soundName() const {return state.state.getProperty("soundName").toString();}
+ StringArray soundNames() const {auto names=PresetStorage(sharedRoot(),"Sounds").names();names.mergeArray(PresetStorage(presetRoot(),"Sounds").names());names.sort(true);return names;}
+ Result loadSound(const String& name){auto xml=PresetStorage(presetRoot(),"Sounds").load(name);if(!xml)xml=PresetStorage(sharedRoot(),"Sounds").load(name);if(!xml)return Result::fail("Son absent ou invalide dans Presets/Sounds.");
+  MemoryBlock data;copyXmlToBinary(*xml,data);setStateInformation(data.getData(),int(data.getSize()));state.state.removeProperty("userPresetName",nullptr);state.state.setProperty("soundName",name,nullptr);modified.store(false);return Result::ok();}
  bool userPresetExists(const String& name) const {return PresetStorage(presetRoot()).exists(name);}
- Result saveUserPreset(const String& name,bool replace=false){auto saved=state.copyState();saved.setProperty("program",currentProgram.load(),nullptr);saved.setProperty("modified",false,nullptr);saved.setProperty("userPresetName",name,nullptr);auto xml=saved.createXml();auto result=PresetStorage(presetRoot()).save(name,*xml,replace);if(result.wasOk()){state.state.setProperty("userPresetName",name,nullptr);modified.store(false);}return result;}
- Result loadUserPreset(const String& name){auto xml=PresetStorage(presetRoot()).load(name);if(!xml)return Result::fail("Preset absent, invalide ou inaccessible dans Presets/User.");MemoryBlock data;copyXmlToBinary(*xml,data);setStateInformation(data.getData(),int(data.getSize()));state.state.setProperty("userPresetName",name,nullptr);modified.store(false);return Result::ok();}
+ Result saveUserPreset(const String& name,bool replace=false){auto saved=state.copyState();saved.setProperty("program",currentProgram.load(),nullptr);saved.setProperty("modified",false,nullptr);saved.setProperty("userPresetName",name,nullptr);saved.removeProperty("soundName",nullptr);auto xml=saved.createXml();auto result=PresetStorage(presetRoot()).save(name,*xml,replace);if(result.wasOk()){state.state.setProperty("userPresetName",name,nullptr);state.state.removeProperty("soundName",nullptr);modified.store(false);}return result;}
+ Result loadUserPreset(const String& name){auto xml=PresetStorage(presetRoot()).load(name);if(!xml)return Result::fail("Preset absent, invalide ou inaccessible dans Presets/User.");MemoryBlock data;copyXmlToBinary(*xml,data);setStateInformation(data.getData(),int(data.getSize()));state.state.removeProperty("soundName",nullptr);state.state.setProperty("userPresetName",name,nullptr);modified.store(false);return Result::ok();}
  bool isPatchModified() const {return modified.load();}
   // Host pages of eight, in the order of the front panel.
   static constexpr const char* hostPages[]={
@@ -50,7 +57,7 @@ public:
    "mode","voiceMode","age","voiceWidth","hold","chorusMode","chorus","fxDrive",                  // VOICES, CHORUS
    "arpOn","arpSync","arpPattern","arpDivision","arpOctaves","arpTempo","arpGate","delayOn",      // ARPEGGIO
    "delayTime","delaySync","delayFeedback","delayMod","delayMix","reverbOn","reverbType","reverbSize", // DELAY, REVERB
-   "reverbDamp","reverbColor","reverbMix","lfoManual","lfoTrig"};                                        // REVERB, EXPRESSION
+   "reverbDamp","reverbColor","reverbMix","lfoManual","lfoTrig","atVolume","atLfo","atDrive"};                                        // REVERB, EXPRESSION
   // Short names for the host and controller displays (Push shows about a dozen characters).
   static String label(const String& id,const String& longName){
    static const std::map<String,String> names{
@@ -64,7 +71,7 @@ public:
     {"mode","Voices"},{"voiceMode","Assign"},{"age","Age"},{"voiceWidth","Width"},{"hold","Hold"},{"chorusMode","Chorus"},{"chorus","Chorus Mix"},{"gain","Volume"},
     {"arpOn","Arp On"},{"arpSync","Arp Sync"},{"arpPattern","Arp Mode"},{"arpDivision","Arp Step"},{"arpOctaves","Arp Range"},{"arpTempo","Arp Tempo"},{"arpGate","Arp Gate"},{"fxDrive","Drive Post"},
     {"delayTime","Dly Time"},{"delaySync","Dly Sync"},{"delayFeedback","Dly Fdbk"},{"delayMod","Dly Mod"},{"delayMix","Dly Level"},{"reverbType","Rev Type"},{"reverbSize","Rev Size"},{"reverbDamp","Rev Damp"},
-    {"reverbColor","Rev Color"},{"reverbMix","Rev Level"},{"velFilter","Vel>Filter"},{"atFilter","Press>Filt"},{"delayOn","Dly On"},{"reverbOn","Rev On"},{"lfoSync","LFO Sync"},{"lfoKeyTrig","LFO KeyTrig"},{"envLfoTrig","Env LFO Trig"},{"wheelFilter","Wheel>Filt"},{"lfoManual","LFO Manual"},{"lfoTrig","LFO Trig"},{"masterTune","Master Tune"}};
+    {"reverbColor","Rev Color"},{"reverbMix","Rev Level"},{"velFilter","Vel>Filter"},{"atFilter","Press>Filt"},{"delayOn","Dly On"},{"reverbOn","Rev On"},{"lfoSync","LFO Sync"},{"lfoKeyTrig","LFO KeyTrig"},{"envLfoTrig","Env LFO Trig"},{"wheelFilter","Wheel>Filt"},{"lfoManual","LFO Manual"},{"atVolume","Press>Vol"},{"atLfo","Press>LFO"},{"atDrive","Press>Drive"},{"lfoTrig","LFO Trig"},{"masterTune","Master Tune"}};
    const auto found=names.find(id);return found!=names.end()?found->second:longName;
   }
  static AudioProcessorValueTreeState::ParameterLayout parameters() {
@@ -78,7 +85,11 @@ public:
   // control centred on zero), so mark 3 always displays 3.0. Controls with a real unit add it in brackets,
   // for example "4.0 (120 BPM)" or "6.3 (1800 Hz)".
   auto add=[&](const char* id,const char* name,float lo,float hi,float def,float skew=1.f) {
-   const NormalisableRange<float> range(lo,hi,0,skew);const bool centred=lo<0.f,whole=hi>=100.f,fine=lo>0.f&&lo<.06f;
+   // Filter A FREQ: the same number of octaves for every mark of the fader, as on the Juno (a slider voltage into an
+   // exponential converter). With a power curve the top half of the travel held 1.8 to 18 kHz, where little changes.
+   const bool octaves=String(id)=="cutoff";
+   const NormalisableRange<float> range=octaves?NormalisableRange<float>(lo,hi,[](float s,float e,float x){return s*std::pow(e/s,x);},[](float s,float e,float v){return std::log(v/s)/std::log(e/s);},nullptr)
+                                               :NormalisableRange<float>(lo,hi,0,skew);const bool centred=lo<0.f,whole=hi>=100.f,fine=lo>0.f&&lo<.06f;
    String unit=String(name).fromFirstOccurrenceOf("(",false,false).upToFirstOccurrenceOf(")",false,false);
    const String key(id);if(key=="arpTempo")unit="BPM";if(key=="fattack"||key=="fdecay"||key=="frelease")unit="s";if(key=="osc2Tune")unit="st";
    if(unit=="semitones")unit="st";if(unit=="octaves")unit="oct";if(unit=="cents")unit="ct";
@@ -133,6 +144,7 @@ public:
   keep(std::make_unique<AudioParameterBool>(ParameterID{"envLfoTrig",1},label("envLfoTrig","Envelopes on LFO cycle"),false));
   keep(std::make_unique<AudioParameterChoice>(ParameterID{"lfoSync",1},label("lfoSync","LFO sync"),StringArray{"FREE","4 BARS","2 BARS","1 BAR","1/2","1/4","1/8","1/16","1/4 T","1/8 T","1/16 T"},0));
   add("wheelFilter","Mod wheel to filter",0,1,0);
+  add("atVolume","Pressure to volume",0,1,0);add("atLfo","Pressure to LFO on the filters",0,1,0);add("atDrive","Pressure to drive",0,1,0);
   // LFO MAN: the LFO only runs while LFO TRIG is held (a panel key, or any learned MIDI button), its DELAY counted from the press.
   keep(std::make_unique<AudioParameterBool>(ParameterID{"lfoManual",1},label("lfoManual","LFO manual trigger mode"),false));
   keep(std::make_unique<AudioParameterBool>(ParameterID{"lfoTrig",1},label("lfoTrig","LFO trigger"),false));add("masterTune","Master tune (cents)",-50,50,0);add("atFilter","Pressure to filter",0,1,0);
@@ -195,9 +207,12 @@ public:
   set("envLink",p.engine==0?1.f:0.f);
   if(index==10 || index==16 || index==19){set("oscLayer",.75f);set("envLink",0);set("slope",0);}
   if(index==10)set("fxDrive",.25f);
+  // INIT: the filter has its own envelope, falling back low after each attack, so ENV sweeps every note and FREQ sets
+  // the held tone (following the amp envelope it stayed 70 % open and pushed FREQ, and the resonance, far up).
+  if(index==0){set("envLink",0);set("fattack",.005f);set("fdecay",.5f);set("fsustain",.2f);set("frelease",.4f);}
   if(index>=18){set("reverbMix",.18f);set("reverbSize",.7f);}
   if(index==13 || index==14){set("fattack",.012f);set("fdecay",.48f);set("fsustain",.55f);set("frelease",.22f);set("slope",0);set("keytrack",.35f);set("pwm",0);set("reverbMix",.09f);}
-  currentProgram.store(index);state.state.removeProperty("userPresetName",nullptr);modified.store(false);
+  currentProgram.store(index);state.state.removeProperty("userPresetName",nullptr);state.state.removeProperty("soundName",nullptr);modified.store(false);
  }
  const String getProgramName(int index) override {return isPositiveAndBelow(index,getNumPrograms())?patches()[size_t(index)].name:String();}
  void changeProgramName(int,const String&) override {}
@@ -214,6 +229,7 @@ public:
  bool isBusesLayoutSupported(const BusesLayout& b) const override {return b.getMainOutputChannelSet()==AudioChannelSet::stereo();}
  void processBlock(AudioBuffer<float>& buffer,MidiBuffer& midi) override {
   ScopedNoDenormals noDenormals;buffer.clear();keyboard.processNextMidiBuffer(midi,0,buffer.getNumSamples(),true);
+  if(const int press=screenPressure.exchange(-1);press>=0)midi.addEvent(MidiMessage::channelPressureChange(1,press),0); // trackpad force on the panel keyboard
   // MIDI learn and learned controls. The mod wheel, sustain, bank select and channel messages keep their own jobs.
   for(const auto event:midi){const auto message=event.getMessage();if(!message.isController())continue;
    const int cc=message.getControllerNumber();if(cc==0||cc==1||cc==32||cc==64||cc>=120)continue;
@@ -328,6 +344,8 @@ private:
   }
  }
  ModulationBus modulation;double lfoPhase=0,manualCount=0;
+ public: std::atomic<int> screenPressure{-1}; // set by the panel keyboard (Force Touch), sent as channel pressure
+ private:
  std::atomic<bool> modified{false};
  std::atomic<int> currentProgram{0};
  GlideMemory previousClassic,previousJupiter;double sampleRate=44100;Arpeggiator arp;CharacterDelay echo;OrbitReverb reverb;NoteHold hold;

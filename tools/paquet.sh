@@ -1,6 +1,6 @@
 #!/bin/bash
 # Builds the macOS installer:  build/Orbit106-<version>.pkg
-# It installs the AU and VST3 plug-ins, the standalone application and the rendered artwork for every user.
+# It installs the AU and VST3 plug-ins, the standalone application, the rendered artwork and the sounds (Presets/Sounds) for every user.
 # Usage:  bash tools/paquet.sh        (after a build and a final render: bash tools/rendu.sh final)
 set -e
 cd "$(dirname "$0")/.."
@@ -28,6 +28,10 @@ ditto "$OUT/Standalone/Orbit 106.app" "$STAGE/Applications/Orbit 106.app"
 for image in background.jpg knob.png fader.png led.png index_amber.png index_teal.png index_neutral.png layout.rendered.json; do
   cp "$SKIN/$image" "$STAGE/Library/Application Support/SF Instruments/Orbit 106/Skin/"
 done
+# The sounds shipped with Orbit (menu SOUNDS), from the project's Presets/Sounds folder.
+SOUNDS="$STAGE/Library/Application Support/SF Instruments/Orbit 106/Presets/Sounds"; mkdir -p "$SOUNDS"
+count=0; for sound in Presets/Sounds/*.orbitpreset; do [ -f "$sound" ] && cp "$sound" "$SOUNDS/" && count=$((count + 1)); done
+echo "Sons inclus : $count"
 find "$STAGE" -name ".DS_Store" -delete
 xattr -cr "$STAGE"
 chmod -R u+w,go+rX "$STAGE"   # pkgbuild complains about files it cannot write (read-only copies)

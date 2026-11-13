@@ -7,6 +7,9 @@ juce_add_plugin(Orbit106 ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Source/Assets/orb
 juce_add_binary_data(OrbitReference SOURCES design/neo-vintage/reference-approved.png)
 target_link_libraries(Orbit106 PRIVATE OrbitReference)
 target_sources(Orbit106 PRIVATE Source/Plugin.cpp)
+if(APPLE)
+  target_sources(Orbit106 PRIVATE Source/ForceTouch.mm) # trackpad force on the panel keyboard
+endif()
 target_compile_definitions(Orbit106 PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
 target_link_libraries(Orbit106 PRIVATE juce::juce_audio_utils juce::juce_dsp PUBLIC juce::juce_recommended_config_flags)
 juce_add_console_app(OrbitSmoke PRODUCT_NAME "Orbit Smoke Tests")

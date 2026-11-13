@@ -49,7 +49,14 @@ public:
  void prepare(double sr) { sampleRate=float(sr); for(auto& f:svf){f.prepare({sr,512,1});f.setType(dsp::StateVariableTPTFilterType::lowpass);} reset(); }
  void reset() { ladder.fill(0.f); for(auto& f:svf)f.reset(); }
  void setDrive(float amount) { drive=jmax(.2f,amount); } // how hard the ladder is pushed: more = earlier, rounder limiting
- void configure(int model,int slope,float resonance) { type=model; stages=slope; feedback=maxFeedback*std::pow(jlimit(0.f,1.f,resonance),resonanceCurve); for(auto& f:svf)f.setResonance(.7071f+resonance*7.f); }
+ void configure(int model,int slope,float resonance) { type=model; stages=slope; feedback=maxFeedback*jlimit(0.f,1.f,resonance/.95f); // RES fader: a gentle, even rise, matched by measurement to the reference recording (about +2.5 dB at 5, +8 dB at 10)
+  // The last few steps of RES tip the ladder into self-oscillation, as on the Juno-106 (resonance "0 to self oscillation").
+  if(const float t=jlimit(0.f,1.f,(resonance-.9f)/.05f);t>0.f)feedback+=selfOscillation*t*t*(3.f-2.f*t); for(auto& f:svf)f.setResonance(.7071f+resonance*7.f);
+  // Ladder FREQ: without resonance the four poles sit an octave up (cutoffScale) so the ladder is as bright as the
+  // state-variable model; as resonance comes in they move down so that the resonant peak sits on FREQ itself
+  // (measured: with the poles left an octave up, the peak sang 1.6 to 2 times higher than the fader said).
+  const float r=jlimit(0.f,1.f,resonance),k=jmin(1.f,r/.3f),blend=k*k*(3.f-2.f*k),onPeak=1.f+.35f*(1.f-r)*(1.f-r);
+  ladderScale=cutoffScale*(1.f-blend)+onPeak*blend; }
  float process(float x,float cutoff) {
   if(type==0) return processLadder(x,cutoff);
   svf[0].setCutoffFrequency(cutoff); x=svf[0].processSample(0,x);
@@ -63,7 +70,7 @@ private:
  // setting (four poles are already 12 dB down at their own frequency, hence cutoffScale), a resonance that comes in
  // early and sings at the top of its range, and the same soft output stage, so a strong peak growls instead of clipping.
  float processLadder(float x,float cutoff) {
-  const float g=std::tan(MathConstants<float>::pi*jmin(cutoff*cutoffScale,sampleRate*.45f)/sampleRate), G=g/(1.f+g), keep=1.f-G, G2=G*G;
+  const float g=std::tan(MathConstants<float>::pi*jmin(cutoff*ladderScale,sampleRate*.45f)/sampleRate), G=g/(1.f+g), keep=1.f-G, G2=G*G;
   const float pending=keep*(G2*G*ladder[0]+G2*ladder[1]+G*ladder[2]+ladder[3]);
   // The signal enters at a low level so the saturation inside the loop only bites on the resonant peak (the
   // resonance builds up instead of being flattened); the lows the resonance takes away are given back at the output.
@@ -71,11 +78,13 @@ private:
   y=std::tanh(y*drive)/drive;
   float tap=0;
   for(size_t n=0;n<4;++n){const float v=(y-ladder[n])*G; y=v+ladder[n]; ladder[n]=y+v; if(n==1)tap=y;}
-  return std::tanh((stages?y:tap)/inputLevel*outputLevel*(1.f+bassReturn*feedback));
+  // Output stage with headroom: it only rounds off real peaks, so a resonant peak and an envelope sweep stand out
+  // above the rest of the sound instead of being flattened into it.
+  return std::tanh((stages?y:tap)/inputLevel*outputLevel*(1.f+bassReturn*feedback)*outputHeadroom)/outputHeadroom*.85f;
  }
- std::array<float,4> ladder{}; std::array<dsp::StateVariableTPTFilter<float>,2> svf; float sampleRate=44100.f,feedback=.4f,drive=1.2f; int type=0,stages=1;
+ std::array<float,4> ladder{}; std::array<dsp::StateVariableTPTFilter<float>,2> svf; float sampleRate=44100.f,feedback=.4f,drive=1.2f,ladderScale=cutoffScale; int type=0,stages=1;
  // Ladder voicing, measured against the state-variable model and to adjust by ear.
- static constexpr float inputLevel=.2f,outputLevel=1.8f,bassReturn=.8f,maxFeedback=4.05f,resonanceCurve=.45f,cutoffScale=2.f;
+ static constexpr float inputLevel=.2f,outputLevel=1.8f,bassReturn=.45f,maxFeedback=2.2f,selfOscillation=0.f,resonanceCurve=1.f,cutoffScale=2.f,outputHeadroom=.35f;
 };
 // What the voices of one instrument share for the glide: the pitch the most recent note is sounding at right now
 // (in Hz, part-way through its own glide if it has one), and a count of note starts that tells which note that is.
@@ -169,7 +178,7 @@ public:
   const float manualRate=1.f-std::exp(-1.f/(.015f*float(sr))); // LFO MAN: the LFO comes and goes over about 15 ms, never with a click
   const float tracking=std::pow(float(hz/261.625565),p("keytrack"));
   // VEL > FILTER: a softer note is darker, by up to four octaves; a full-velocity note is unchanged.
-  const float velocityOpen=std::pow(2.f,p("velFilter")*4.f*(vel-1.f)),pressFilter=p("atFilter")*3.f,pressRate=1.f-std::exp(-1.f/(.01f*float(sr)));
+  const float velocityOpen=std::pow(2.f,p("velFilter")*4.f*(vel-1.f)),pressFilter=p("atFilter")*3.f,pressLfo=p("atLfo")*2.f,pressVolume=p("atVolume"),pressDrive=p("atDrive"),pressRate=1.f-std::exp(-1.f/(.01f*float(sr)));
   // Eight-voice instrument: each voice runs its own copy of the LFO at a slightly different speed (AGE), starting in
   // step with the others at each note and drifting apart, so a held chord moves instead of wobbling as one block.
   const bool ownLfo=vintage&&p("age")>0.f;const double lfoDrift=bus.step*double(p("age")*lfoRateError*lfoTune);
@@ -211,7 +220,7 @@ public:
    cutNow+=follow5ms*(cutoff-cutNow);cutBNow+=follow5ms*(cutoffB-cutBNow);levelNow+=follow5ms*(level-levelNow);layerNow+=follow5ms*(layer-layerNow);subNow+=follow5ms*(subLevel-subNow);noiseNow+=follow5ms*(noise-noiseNow);
    const bool gliding=pitch.isSmoothing();const double pitchNow=pitch.getNextValue(),frequency=gliding?std::exp2(pitchNow):hz; // exactly the note once the glide is over
    if(serial==previousPitch.starts)previousPitch.pitch=frequency;
-   const double base=frequency*bend/sr*std::pow(2.,(modulation*pitchDepth+lfoNow*vibratoDepth*jmax(wheel,pressureNow)+(sync?0.f:fe*envPitch))/12.);
+   const double base=frequency*bend/sr*std::pow(2.,(modulation*pitchDepth+lfoNow*vibratoDepth*wheel+(sync?0.f:fe*envPitch))/12.);
    double detune1=1.,detune2=1.;
    if(age>0.f){ // each oscillator wanders slowly around its own small tuning error (cents turned into a ratio; exact enough this close to 1)
     if(--driftCount<=0){driftTarget1=wander.nextFloat()*2-1;driftTarget2=wander.nextFloat()*2-1;driftCount=int(sr*(.4+1.2*wander.nextFloat()));}
@@ -222,11 +231,15 @@ public:
    const float pwmMove=pwmSource==0?.18f*pwmDepth*modulation:pwmSource==2?.4f*pwmDepth*fe:pwmSource==3?-.4f*pwmDepth*fe:pwmSource==4?.4f*pwmDepth*e:pwmSource==5?-.4f*pwmDepth*e:0.f; // LFO, MAN, filter env +/-, amp env +/-
    float pwm=jlimit(.08f,.92f,width+pwmMove),pwm2=jlimit(.08f,.92f,(shape2==0?width:width2)+pwmMove);
    punch*=punchDecay; // a few milliseconds of extra brightness and level at the start of each note: the percussive front
-   float ca=jlimit(25.f,float(sr*.45),(1.f+punchCutoff*punch)*cutNow*cutSpread*tracking*velocityOpen*wheelOpen*std::exp2(pressFilter*pressureNow)*bendCutoff*std::pow(2.f,fe*amount*polarity*6+modulation*filterDepth));
-   float cb=jlimit(25.f,float(sr*.45),cutBNow*cutSpread*tracking*velocityOpen*wheelOpen*std::exp2(pressFilter*pressureNow)*bendCutoff*std::pow(2.f,fe*amountB*6+modulation*filterDepth));
+   float ca=jlimit(25.f,float(sr*.45),(1.f+punchCutoff*punch)*cutNow*cutSpread*tracking*velocityOpen*wheelOpen*std::exp2(pressFilter*pressureNow)*bendCutoff*std::pow(2.f,fe*amount*polarity*6+modulation*filterDepth+lfoNow*pressLfo*pressureNow));
+   float cb=jlimit(25.f,float(sr*.45),cutBNow*cutSpread*tracking*velocityOpen*wheelOpen*std::exp2(pressFilter*pressureNow)*bendCutoff*std::pow(2.f,fe*amountB*6+modulation*filterDepth+lfoNow*pressLfo*pressureNow));
    // Oscillators, mixer, filters and drive run at twice the sample rate and come back down through a half-band
    // filter: the overtones that sync, cross modulation and every saturation throw above the audio band are removed
    // instead of folding back down as metallic, out-of-tune noise.
+   // Pressure can also push the drive (from any PRE setting, and in both voice counts), add LFO on the filters, and
+   // lift the level by up to 6 dB: the harder the key is pressed, the more the note opens, moves, growls and grows.
+   float g=grit,gPush=push,gLean=lean,gOffset=leanOffset,gScale=pushScale,gMix=driveMix;
+   if(pressDrive>0.f&&pressureNow>.0005f){g=jmin(1.f,grit+pressDrive*pressureNow);gPush=1.f+3.f*g;gLean=.15f*g;gOffset=std::tanh(gLean);gScale=(1.f+g)/gPush;gMix=jmin(1.f,g*4.f);}
    float twice[2];
    for(int k=0;k<2;++k){
     const double h1=dt*.5,h2=dt2*.5,hx=crossMod>0?jlimit(.0000001,.45,h1*(1.+crossMod*lastOsc2)):h1;
@@ -235,14 +248,14 @@ public:
     sample=.7f*sample+.3f*subNow*wave(sub,h1*.5,.5f,1);sample+=noiseNow*.2828f*(random.nextFloat()*2-1); // noise level kept: half of it is filtered out on the way down
     if(hpfMode>=2)sample=highpass.processSample(0,sample);else if(hpfMode==0){bass+=bassRate*(sample-bass);sample+=boostGain*bass;}
     switch(route){case 1:sample=b.process(sample,cb);break;case 2:sample=b.process(a.process(sample,ca),cb);break;case 3:sample=a.process(b.process(sample,cb),ca);break;case 4:sample=(1-blend)*a.process(sample,ca)+blend*b.process(sample,cb);break;default:sample=a.process(sample,ca);}
-    if(grit>0.f){sample+=driveMix*((std::tanh(push*sample+lean)-leanOffset)*pushScale-sample);dc+=dcRate*(sample-dc);sample-=dc;} // the lopsided curve leaves a small offset: removed here
+    if(g>0.f){sample+=gMix*((std::tanh(gPush*sample+gLean)-gOffset)*gScale-sample);dc+=dcRate*(sample-dc);sample-=dc;} // the lopsided curve leaves a small offset: removed here
     twice[k]=sample;
     phase+=hx;
     if(phase>=1.){phase-=std::floor(phase);if(sync)phase2=phase/hx*h2-h2;} // restart II at the exact point inside the step where I wrapped
     phase2+=h2;phase2-=std::floor(phase2);sub+=h1*.5;sub-=std::floor(sub);
    }
    float sample=down.process(twice[0],twice[1]);
-   sample*=amp*(1-velocity+velocity*vel)*.18f*voiceGain*(1.f+punchLevel*punch);
+   sample*=amp*(1-velocity+velocity*vel)*.18f*voiceGain*(1.f+punchLevel*punch)*(pressVolume>0.f?std::exp2(pressVolume*pressureNow):1.f);
    lastL=sample*gainL;lastR=sample*gainR;tailL*=tailDecay;tailR*=tailDecay;
    for(int ch=0;ch<out.getNumChannels();++ch)out.addSample(ch,start+i,ch==0?lastL+tailL:(ch==1?lastR+tailR:sample));
    if(!(gated?gate.isActive():(vcaSource==2?filterEnv.isActive():env.isActive()))){clearCurrentNote();break;}

@@ -4,8 +4,9 @@
 
 class PresetStorage {
 public:
- explicit PresetStorage(juce::File project):root(std::move(project)){}
- juce::File directory() const {return root.getChildFile("Presets/User");}
+ // folder: "User" for the presets saved with SAVE, "Sounds" for the sounds shipped with Orbit.
+ explicit PresetStorage(juce::File project,juce::String folder="User"):root(std::move(project)),sub(std::move(folder)){}
+ juce::File directory() const {return root.getChildFile("Presets").getChildFile(sub);}
  juce::Result checkDirectory() const {
   namespace fs=std::filesystem;std::error_code error;
   for(auto path:{root.getChildFile("Presets"),directory()}){
@@ -38,5 +39,5 @@ public:
   for(const auto& file:directory().findChildFiles(juce::File::findFiles,false,"*.orbitpreset")){auto name=file.getFileNameWithoutExtension();if(validName(name))result.add(name);}
   result.sort(true);return result;
  }
-private:juce::File root;
+private:juce::File root;juce::String sub;
 };
