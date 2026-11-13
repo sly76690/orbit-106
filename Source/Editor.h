@@ -358,6 +358,37 @@ private:
  RangedAudioParameter& parameter; ParameterAttachment attachment;
 };
 
+// Key with an LED that puts a time control on the tempo: off, the knob sets a free time; on, the same place holds a
+// stepped knob over the note values. The key remembers the last note value, so switching back and forth keeps it.
+class SyncKey : public TextButton {
+public:
+ SyncKey(RangedAudioParameter& choice, int fallback) : remembered(fallback),
+  attachment(choice, [this](float value) { const int index = roundToInt(value); if (index > 0) remembered = index; setToggleState(index > 0, dontSendNotification); }, nullptr) {
+  setButtonText("SYNC"); getProperties().set("led", 2);
+  onClick = [this] { attachment.setValueAsCompleteGesture(getToggleState() ? 0.f : float(remembered)); };
+  attachment.sendInitialUpdate();
+ }
+private:
+ int remembered; ParameterAttachment attachment;
+};
+
+// Stepped knob over the note values of a sync choice; FREE is left to the SYNC key.
+class SyncKnob : public Slider {
+public:
+ explicit SyncKnob(RangedAudioParameter& choice) : names(choice.getAllValueStrings()),
+  attachment(choice, [this](float value) { const int index = roundToInt(value); if (index > 0) setValue(index, dontSendNotification); }, nullptr) {
+  setSliderStyle(RotaryHorizontalVerticalDrag); setTextBoxStyle(NoTextBox, false, 0, 0); setRange(1, jmax(2, names.size() - 1), 1);
+  setMouseDragSensitivity(120);
+  onDragStart = [this] { attachment.beginGesture(); }; onDragEnd = [this] { attachment.endGesture(); };
+  onValueChange = [this] { attachment.setValueAsPartOfGesture(float(getValue())); };
+  getProperties().set("overlay", true); // sits over the free knob: not part of the rendered layout
+  attachment.sendInitialUpdate();
+ }
+ String getTextFromValue(double value) override { return names[jlimit(0, names.size() - 1, roundToInt(value))]; }
+private:
+ StringArray names; ParameterAttachment attachment;
+};
+
 class Editor : public AudioProcessorEditor, private Timer {
  using APVTS = AudioProcessorValueTreeState;
  enum { designW = 1600, designH = 1000, left = 32, contentW = 1536, gap = 12 };
@@ -497,6 +528,16 @@ private:
   place(toggle->button, bounds, page);
   toggle->attachment = std::make_unique<APVTS::ButtonAttachment>(orbit.state, id, toggle->button);
  }
+ // SYNC key at keyBounds, and a stepped note-value knob stacked over the free knob; only one of the two knobs shows.
+ void addSync(const char* id, int fallback, Slider& freeKnob, Rectangle<int> keyBounds, int page, Label* value) {
+  auto* sync = syncs.add(new Sync()); sync->id = id; sync->free = &freeKnob; sync->value = value;
+  auto& parameter = *orbit.state.getParameter(id);
+  sync->key = std::make_unique<SyncKey>(parameter, fallback); orbitui::tint(*sync->key, orbitui::neutral); place(*sync->key, keyBounds, page);
+  sync->knob = std::make_unique<SyncKnob>(parameter); sync->knob->setPopupDisplayEnabled(true, true, &surface); sync->knob->setName(parameter.getName(60));
+  sync->knob->setColour(Slider::rotarySliderFillColourId, freeKnob.findColour(Slider::rotarySliderFillColourId));
+  if (freeKnob.getProperties().contains("faceDiameter")) sync->knob->getProperties().set("faceDiameter", freeKnob.getProperties()["faceDiameter"]);
+  place(*sync->knob, freeKnob.getBounds(), page);
+ }
  void useOwnFilterEnvelope() {
   auto* link = orbit.state.getParameter("envLink");
   if (link->getValue() > .5f) { link->beginChangeGesture(); link->setValueNotifyingHost(0.f); link->endChangeGesture(); }
@@ -583,14 +624,17 @@ private:
 
   const auto mod = section("LFO / MODULATION", teal, modW);
   auto top = split(mod.withHeight(120), {float(plain), float(plain), float(selector), float(plain)});
-  addRowKnob("rate", "RATE", top[0]); addRowKnob("lfoDelay", "DELAY", top[1]);
+  addRowKnob("rate", "RATE", top[0]);
+  auto& rateKnob = faders.getLast()->slider; auto* rateValue = labels.getLast(); // the value under RATE shows the note value while synced
+  addRowKnob("lfoDelay", "DELAY", top[1]);
   addWaveKnob("lfoShape", "WAVE", {"TRI", "SINE", "SAW", "SQUARE"}, 0, top[2]);
   addRowKnob("lfoPitch", "PITCH", top[3]);
   // Under the LFO knobs: the tempo sync window, KEY TRIG and ENV TRIG.
   const auto under = [](Rectangle<int> cell) { return Rectangle<int>(cell.getX() + 4, cell.getY() + 92, cell.getWidth() - 8, 21); };
-  place(*menuButtons.add(new ChoiceMenuButton(*orbit.state.getParameter("lfoSync"))), under(top[0]), 0);
+  addSync("lfoSync", 5, rateKnob, under(top[0]), 0, rateValue); // 5 = 1/4
   addToggle("lfoKeyTrig", "KEY TRIG", 0, under(top[1]), 2, neutral);
   addToggle("envLfoTrig", "ENV TRIG", 0, under(top[2]), 2, neutral);
+  addToggle("lfoManual", "MAN", 0, under(top[3]), 2, neutral); // the LFO only runs while LFO TRIG is held
   auto bottom = split(mod.withTrimmedTop(118), {float(selector), float(plain), float(plain), float(plain)});
   addWaveKnob("pwmSource", "PWM", {"LFO", "MAN", "F+", "F-", "A+", "A-"}, 0, bottom[0]); // filter or amp envelope, either way up
   addRowKnob("envPitch", "ENV>PITCH", bottom[1]); addRowKnob("wheelDepth", "WHEEL", bottom[2]); addRowKnob("wheelFilter", "WHL>FLT", bottom[3]);
@@ -648,7 +692,7 @@ private:
   addToggle("arpSync", "SYNC", -1, cells[1].withHeight(38), 1, neutral);
   addChoice("arpPattern", "", {"UP", "DOWN", "U&D", "RND"}, -1, cells[2].withHeight(38), false);
   cells = split(arp.withTrimmedTop(52), {3, 2.4f, 1.2f, 1.2f});
-  addChoice("arpDivision", "STEP", {"1/4", "1/8", "1/16"}, -1, cells[0], false);
+  addChoice("arpDivision", "STEP", {"1/4", "1/8", "1/16", "1/32"}, -1, cells[0], false);
   addChoice("arpOctaves", "OCT", {"1", "2", "3"}, -1, cells[1], false);
   addKnob("arpTempo", "TEMPO", cells[2]); addKnob("arpGate", "GATE", cells[3]);
   cells = split(row.next("DELAY", teal, 4.6f), {1, 1, 1, 1});
@@ -657,7 +701,9 @@ private:
   const int timeWidth = jmin(50, cells[0].getWidth());
   delayTimeKnob = &addControl("delayTime", Slider::RotaryHorizontalVerticalDrag, Rectangle<int>(cells[0].getCentreX() - timeWidth / 2, cells[0].getY() + 15, timeWidth, 54), -1).slider;
   addEffectScale("delayTime", cells[0]);
-  place(*menuButtons.add(new ChoiceMenuButton(*orbit.state.getParameter("delaySync"))), {cells[0].getX() + 1, cells[0].getY() + 88, cells[0].getWidth() - 2, 24}, -1);
+  caption({}, {cells[0].getCentreX() - 13, cells[0].getY() + 61, 26, 12}, -1, 10.f); // the note value while synced, between 0 and 10
+  labels.getLast()->getProperties().set("live", true);
+  addSync("delaySync", 6, *delayTimeKnob, {cells[0].getX() + 1, cells[0].getY() + 88, cells[0].getWidth() - 2, 24}, -1, labels.getLast()); // 6 = 1/8
   addKnob("delayFeedback", "FDBK", cells[1], true); addKnob("delayMod", "MOD", cells[2], true); addKnob("delayMix", "LEVEL", cells[3], true);
   addToggle("delayOn", "ON", -1, {cells[3].getX() + 2, cells[3].getY() + 80, cells[3].getWidth() - 4, 44}, 1, neutral); // switches the delay off without touching its settings
   // The reverb type (VINT / PLATE / SPACE) is chosen on the keys under the four knobs.
@@ -679,6 +725,12 @@ private:
   caption("KEYBOARD", {left, keysY + 28, 132, 16}, -1);
   addButton(octDown, "OCT -", {left + 10, keysY + 56, 53, 40}, neutral, 0); addButton(octUp, "OCT +", {left + 69, keysY + 56, 53, 40}, neutral, 0);
   octDown.onClick = [this] { octave = jmax(0, octave - 1); updateKeyboard(); }; octUp.onClick = [this] { octave = jmin(4, octave + 1); updateKeyboard(); };
+  // LFO TRIG: held down, it brings the LFO in when LFO MAN is on (it lights while held, from the panel or a learned MIDI button).
+  addButton(lfoTrigButton, "LFO TRIG", {left + 10, keysY + 134, 112, 42}, neutral, 0);
+  lfoTrigButton.onStateChange = [this] {
+   const bool down = lfoTrigButton.isDown(); if (down == lfoTrigDown) return; lfoTrigDown = down;
+   auto* trig = orbit.state.getParameter("lfoTrig"); trig->beginChangeGesture(); trig->setValueNotifyingHost(down ? 1.f : 0.f); trig->endChangeGesture();
+  };
   keyboard.setScrollButtonsVisible(false); keyboard.setKeyWidth(float(contentW - 146) / 36.f); keyboard.setOctaveForMiddleC(4); keyboard.setBlackNoteLengthProportion(.62f);
   place(keyboard, {left + 146, keysY + 6, contentW - 146, keysH - 6}, -1);
   // Computer keyboard, AZERTY rows: Q S D F G H J K L M are the white keys starting on C,
@@ -768,7 +820,7 @@ private:
  static DynamicObject::Ptr boxed(Rectangle<int> r) { DynamicObject::Ptr item = new DynamicObject(); item->setProperty("x", r.getX()); item->setProperty("y", r.getY()); item->setProperty("w", r.getWidth()); item->setProperty("h", r.getHeight()); return item; }
  void collect(Component& parent, Array<var>& texts, Array<var>& faderList, Array<var>& knobList, Array<var>& buttonList) {
   for (auto* child : parent.getChildren()) {
-   if (!child->isVisible() || dynamic_cast<ComboBox*>(child) != nullptr || dynamic_cast<MidiKeyboardComponent*>(child) != nullptr) continue;
+   if (!child->isVisible() || child->getProperties().contains("overlay") || dynamic_cast<ComboBox*>(child) != nullptr || dynamic_cast<MidiKeyboardComponent*>(child) != nullptr) continue;
    const auto area = surface.getLocalArea(child, child->getLocalBounds()); auto item = boxed(area);
    if (auto* label = dynamic_cast<Label*>(child)) {
     if (label->getProperties().contains("live")) continue; // a value readout: it would make the layout differ from one patch to the next
@@ -873,7 +925,15 @@ private:
   if (shown != displayLine) { displayLine = shown; surface.repaint(564, 10, 290, 24); }
   // Standalone only: keep the typing keys on the piano keyboard. Inside a DAW the host keeps its own shortcuts.
   if (orbit.wrapperType == AudioProcessor::wrapperType_Standalone && isShowing() && Component::getCurrentlyFocusedComponent() == nullptr && Component::getCurrentlyModalComponent() == nullptr) keyboard.grabKeyboardFocus();
-  if (delayTimeKnob != nullptr) delayTimeKnob->setAlpha(orbit.state.getRawParameterValue("delaySync")->load() > .5f ? .35f : 1.f); // the knob is idle while synced
+  lfoTrigButton.setToggleState(orbit.state.getRawParameterValue("lfoTrig")->load() > .5f, dontSendNotification);
+  for (auto* sync : syncs) { // synced: the stepped note-value knob takes the place of the free one
+   const bool synced = orbit.state.getRawParameterValue(sync->id)->load() > .5f;
+   sync->free->setAlpha(synced ? 0.f : 1.f); sync->free->setInterceptsMouseClicks(!synced, false);
+   sync->knob->setAlpha(synced ? 1.f : 0.f); sync->knob->setInterceptsMouseClicks(synced, false);
+   if (synced) sync->value->setText(sync->knob->getTextFromValue(sync->knob->getValue()), dontSendNotification);
+   else if (sync->wasSynced) { if (sync->free->onValueChange) sync->free->onValueChange(); else sync->value->setText({}, dontSendNotification); }
+   sync->wasSynced = synced;
+  }
   const bool linked = orbit.state.getRawParameterValue("envLink")->load() > .5f;
   for (auto* fader : faders) if (fader->followsLink) fader->slider.setAlpha(linked ? .4f : 1.f); // dimmed, but still grabbable
  }
@@ -887,8 +947,10 @@ private:
  Orbit& orbit; OrbitSkin skin; OrbitLook look; Surface surface; PianoKeyboard keyboard;
  std::vector<Section> sections; std::vector<std::pair<Component*, int>> paged;
  OwnedArray<Label> labels; OwnedArray<Fader> faders; OwnedArray<Toggle> toggles; OwnedArray<ChoiceButtons> choices; OwnedArray<WaveKnob> waveKnobs; OwnedArray<SlideSwitch> switches; OwnedArray<ChoiceMenuButton> menuButtons; Slider* delayTimeKnob = nullptr;
+ struct Sync { std::unique_ptr<SyncKey> key; std::unique_ptr<SyncKnob> knob; Slider* free = nullptr; Label* value = nullptr; const char* id = ""; bool wasSynced = true; };
+ OwnedArray<Sync> syncs;
  OwnedArray<TextButton> bankButtons, patchButtons;
- ComboBox presets; TextButton saveButton, loadButton, octDown, octUp, midiButton;
+ ComboBox presets; TextButton saveButton, loadButton, octDown, octUp, midiButton, lfoTrigButton; bool lfoTrigDown = false;
  StringArray userNames; String displayLine; Colour sectionColour{orbitui::neutral};
  int page = 0, octave = 2, shownBank = 0, lastProgram = -1;
 };

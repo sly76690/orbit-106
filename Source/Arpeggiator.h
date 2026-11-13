@@ -15,8 +15,8 @@ public:
    wasEnabled=enabled;
   }
   auto it=input.begin();const auto end=input.end();
-  const double factors[]={1.,.5,.25};
-  const int interval=juce::jmax(1,int(sr*60./juce::jlimit(20.,300.,bpm)*factors[juce::jlimit(0,2,division)]));
+  const double factors[]={1.,.5,.25,.125};
+  const int interval=juce::jmax(1,int(sr*60./juce::jlimit(20.,300.,bpm)*factors[juce::jlimit(0,3,division)]));
   const bool grid=enabled&&samplesToGrid>=0;if(grid)remaining=int(samplesToGrid);
   for(int sample=0;sample<samples;++sample) {
    while(it!=end && (*it).samplePosition<=sample) {

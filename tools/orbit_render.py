@@ -453,14 +453,28 @@ for item in layout["labels"]:
         text(item["text"], cx, cy, item["size"] * 1.35, PRINT[item["colour"] if item["colour"] in PRINT else "ink"],
              z=0.00034 if on_plate else 0.00004, fit_px=item["w"])   # captions on the keyboard plate are printed on top of it
 
+SLOT_RIM = material("slot rim", (0.10, 0.10, 0.105, 1.0), 0.28, 1.0, grain=0.05, grain_scale=4000.0, sheen=0.12)
+
 for fader in layout["faders"]:
     cx, top, bottom, marks = fader["cx"], fader["top"], fader["bottom"], max(1, fader["marks"])
-    rect_box(cx - 3, top - 7, 6, bottom - top + 14, 0.0002, SLOT)
+    # a lighter metal lip around a narrow black slot
+    rect_box(cx - 4.5, top - 9, 9, bottom - top + 18, 0.00022, SLOT_RIM, bevel=0.00012)
+    rect_box(cx - 2, top - 7, 4, bottom - top + 14, 0.00028, SLOT)
+    # a ladder scale on each side: long bold ticks at 0, 5 and 10, short ones between, joined by a thin rail
+    first = not any(o is not fader and o["top"] == top and cx - 46 < o["cx"] < cx for o in layout["faders"])
+    for side in (-1, 1):
+        mark(cx + side * 17.5, (top + bottom) / 2, 0.8, bottom - top + 1, "dim")
     for i in range(marks + 1):
         yy = top + (bottom - top) * i / marks
-        length = 9 if (marks != 10 or i % 5 == 0) else 6
-        mark(cx - 8 - length / 2, yy, length, 1)
-        mark(cx + 8 + length / 2, yy, length, 1)
+        major = marks != 10 or i % 5 == 0
+        for side in (-1, 1):
+            if major and first and side < 0 and marks == 10:     # the first fader of a group carries the numbers in its ladder
+                text(str(10 - i), cx - 12.5, yy, 12.5, PRINT["ink"], fit_px=10)
+                continue
+            if major:
+                mark(cx + side * 12, yy, 11, 1.6)
+            else:
+                mark(cx + side * 13.5, yy, 8, 0.9, "dim")
 
 for knob in layout["knobs"]:
     if knob["selector"]:
@@ -589,9 +603,12 @@ for colour in ("amber", "teal", "neutral"):
     line.hide_render = True
 
 catcher.hide_render = False
-cap = box((0, 0, 0.0016), (24 * S, 13 * S, 0.0032), KEYCAP["bright"], bevel=0.0006)
-grip = box((0, 0, 0.00325), (20 * S, 1.2 * S, 0.0002), DARK)
-aim((0.0, 0.0, 0.0016))
+skirt = box((0, 0, 0.0011), (26 * S, 15 * S, 0.0022), DARK_CAP, bevel=0.0005)                # dark base, wider than the top
+cap = box((0, 0, 0.0028), (23 * S, 12 * S, 0.0014), KEYCAP["bright"], bevel=0.0005)          # light top, raised on the base
+grip = box((0, 0, 0.00352), (21 * S, 1.8 * S, 0.0002), DARK)                                  # bold centre line
+for offset in (-3.4, 3.4):
+    box((0, offset * S, 0.00352), (19 * S, 0.5 * S, 0.0001), DARK)                            # two fine grooves for the finger
+aim((0.0, 0.0, 0.0018))
 render(os.path.join(SKIN, "fader.png"), FRAME, FRAME, 48 * S, transparent=True)             # 48 = OrbitSkin::faderFrame
 
 # ---- the glow of a lit LED: painted directly, a bright core in a soft red halo ----

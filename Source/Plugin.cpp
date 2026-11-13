@@ -50,7 +50,7 @@ public:
    "mode","voiceMode","age","voiceWidth","hold","chorusMode","chorus","fxDrive",                  // VOICES, CHORUS
    "arpOn","arpSync","arpPattern","arpDivision","arpOctaves","arpTempo","arpGate","delayOn",      // ARPEGGIO
    "delayTime","delaySync","delayFeedback","delayMod","delayMix","reverbOn","reverbType","reverbSize", // DELAY, REVERB
-   "reverbDamp","reverbColor","reverbMix"};                                        // REVERB, EXPRESSION
+   "reverbDamp","reverbColor","reverbMix","lfoManual","lfoTrig"};                                        // REVERB, EXPRESSION
   // Short names for the host and controller displays (Push shows about a dozen characters).
   static String label(const String& id,const String& longName){
    static const std::map<String,String> names{
@@ -64,7 +64,7 @@ public:
     {"mode","Voices"},{"voiceMode","Assign"},{"age","Age"},{"voiceWidth","Width"},{"hold","Hold"},{"chorusMode","Chorus"},{"chorus","Chorus Mix"},{"gain","Volume"},
     {"arpOn","Arp On"},{"arpSync","Arp Sync"},{"arpPattern","Arp Mode"},{"arpDivision","Arp Step"},{"arpOctaves","Arp Range"},{"arpTempo","Arp Tempo"},{"arpGate","Arp Gate"},{"fxDrive","Drive Post"},
     {"delayTime","Dly Time"},{"delaySync","Dly Sync"},{"delayFeedback","Dly Fdbk"},{"delayMod","Dly Mod"},{"delayMix","Dly Level"},{"reverbType","Rev Type"},{"reverbSize","Rev Size"},{"reverbDamp","Rev Damp"},
-    {"reverbColor","Rev Color"},{"reverbMix","Rev Level"},{"velFilter","Vel>Filter"},{"atFilter","Press>Filt"},{"delayOn","Dly On"},{"reverbOn","Rev On"},{"lfoSync","LFO Sync"},{"lfoKeyTrig","LFO KeyTrig"},{"envLfoTrig","Env LFO Trig"},{"wheelFilter","Wheel>Filt"},{"masterTune","Master Tune"}};
+    {"reverbColor","Rev Color"},{"reverbMix","Rev Level"},{"velFilter","Vel>Filter"},{"atFilter","Press>Filt"},{"delayOn","Dly On"},{"reverbOn","Rev On"},{"lfoSync","LFO Sync"},{"lfoKeyTrig","LFO KeyTrig"},{"envLfoTrig","Env LFO Trig"},{"wheelFilter","Wheel>Filt"},{"lfoManual","LFO Manual"},{"lfoTrig","LFO Trig"},{"masterTune","Master Tune"}};
    const auto found=names.find(id);return found!=names.end()?found->second:longName;
   }
  static AudioProcessorValueTreeState::ParameterLayout parameters() {
@@ -93,17 +93,17 @@ public:
   };
   add("wave","Saw / Pulse",0,1,0.35f);add("width","Pulse width",0.08f,0.92f,0.5f);add("sub","Sub level",0,1,0.7f);add("detune","Detune (cents)",0,30,8);
   add("cutoff","Cutoff (Hz)",25,18000,1800,0.3f);add("resonance","Resonance",0,0.95f,0.2f);add("env","Filter envelope",0,1,0.35f);
-  add("attack","Attack (s)",0.002f,5,0.02f,0.35f);add("decay","Decay (s)",0.01f,5,0.6f,0.4f);add("sustain","Sustain",0,1,0.7f);add("release","Release (s)",0.01f,8,0.8f,0.4f);
-  add("rate","LFO (Hz)",0.05f,12,0.6f,0.4f);add("pwm","PWM depth",0,1,0.3f);add("chorus","Chorus",0,1,0.35f);add("gain","Output",0,1,0.7f);
-  add("fattack","Filter attack",0.002f,5,0.02f,0.35f);add("fdecay","Filter decay",0.01f,5,0.6f,0.4f);add("fsustain","Filter sustain",0,1,0.3f);add("frelease","Filter release",0.01f,8,0.8f,0.4f);
+  add("attack","Attack (s)",0.001f,5,0.02f,0.33f);add("decay","Decay (s)",0.002f,12,0.6f,0.32f);add("sustain","Sustain",0,1,0.7f);add("release","Release (s)",0.002f,12,0.8f,0.32f); // Juno-60 spec sheet: decay and release to 12 s
+  add("rate","LFO (Hz)",0.05f,20,0.6f,0.33f);add("pwm","PWM depth",0,1,0.3f);add("chorus","Chorus",0,1,0.35f);add("gain","Output",0,1,0.7f);
+  add("fattack","Filter attack",0.001f,5,0.02f,0.33f);add("fdecay","Filter decay",0.002f,12,0.6f,0.32f);add("fsustain","Filter sustain",0,1,0.3f);add("frelease","Filter release",0.002f,12,0.8f,0.32f);
   add("hpfFreq","High-pass",0,1,.25f); /* bass boost below a quarter, flat, then a rising high-pass */ add("keytrack","Filter key track",0,1,0.5f);add("noise","Noise",0,1,0);add("velocity","Velocity",0,1,0);
   keep(std::make_unique<AudioParameterChoice>(ParameterID{"slope",1},label("slope","Filter A slope"),StringArray{"12 dB","24 dB"},1));
   keep(std::make_unique<AudioParameterChoice>(ParameterID{"chorusMode",1},label("chorusMode","Chorus mode"),StringArray{"OFF","I","II","I+II"},1));
   add("portamento","Portamento (s)",0,2,0,0.4f);
   keep(std::make_unique<AudioParameterBool>(ParameterID{"arpOn",1},label("arpOn","Arpeggiator"),false));
   keep(std::make_unique<AudioParameterBool>(ParameterID{"arpSync",1},label("arpSync","Host tempo"),false));
-  add("arpTempo","Arp tempo",40,240,120);add("arpGate","Arp gate",0.1f,0.95f,0.65f);
-  keep(std::make_unique<AudioParameterChoice>(ParameterID{"arpDivision",1},label("arpDivision","Arp division"),StringArray{"1/4","1/8","1/16"},1));
+  add("arpTempo","Arp tempo",40,300,120);add("arpGate","Arp gate",0.1f,0.95f,0.65f);
+  keep(std::make_unique<AudioParameterChoice>(ParameterID{"arpDivision",1},label("arpDivision","Arp division"),StringArray{"1/4","1/8","1/16","1/32"},1));
   keep(std::make_unique<AudioParameterChoice>(ParameterID{"arpPattern",1},label("arpPattern","Arp pattern"),StringArray{"UP","DOWN","UP/DOWN","RANDOM"},0));
   keep(std::make_unique<AudioParameterChoice>(ParameterID{"arpOctaves",1},label("arpOctaves","Arp octaves"),StringArray{"1 OCT","2 OCT","3 OCT"},0));
   add("fxDrive","Drive",0,1,0);add("delayTime","Delay time (s)",0.03f,1.5f,0.3f);add("delayFeedback","Delay feedback",0,1.1f,0.3f);add("delayMod","Delay modulation",0,1,0.3f);add("delayMix","Delay mix",0,0.65f,0);
@@ -132,7 +132,10 @@ public:
   keep(std::make_unique<AudioParameterBool>(ParameterID{"lfoKeyTrig",1},label("lfoKeyTrig","LFO key trigger"),false));
   keep(std::make_unique<AudioParameterBool>(ParameterID{"envLfoTrig",1},label("envLfoTrig","Envelopes on LFO cycle"),false));
   keep(std::make_unique<AudioParameterChoice>(ParameterID{"lfoSync",1},label("lfoSync","LFO sync"),StringArray{"FREE","4 BARS","2 BARS","1 BAR","1/2","1/4","1/8","1/16","1/4 T","1/8 T","1/16 T"},0));
-  add("wheelFilter","Mod wheel to filter",0,1,0);add("masterTune","Master tune (cents)",-50,50,0);add("atFilter","Pressure to filter",0,1,0);
+  add("wheelFilter","Mod wheel to filter",0,1,0);
+  // LFO MAN: the LFO only runs while LFO TRIG is held (a panel key, or any learned MIDI button), its DELAY counted from the press.
+  keep(std::make_unique<AudioParameterBool>(ParameterID{"lfoManual",1},label("lfoManual","LFO manual trigger mode"),false));
+  keep(std::make_unique<AudioParameterBool>(ParameterID{"lfoTrig",1},label("lfoTrig","LFO trigger"),false));add("masterTune","Master tune (cents)",-50,50,0);add("atFilter","Pressure to filter",0,1,0);
   add("voiceDrive","Voice drive",0,1,.3f);add("age","Age",0,1,.3f);add("voiceWidth","Voice width",0,1,.5f);
   add("unisonSpread","Unison detune (cents)",0,40,12);add("bendRange","Pitch bend (semitones)",0,24,2);
   choice("filterRoute","Filter routing",{"A only","B only","A > B","B > A","Parallel"});
@@ -224,7 +227,7 @@ public:
    bpm=*hostBpm;
    // While the host plays, line the steps up with its beat grid (quarter, eighth or sixteenth notes).
    if(position->getIsPlaying()&&bpm>1) if(auto beats=position->getPpqPosition()) {
-    const double steps[]={1.,.5,.25},step=steps[jlimit(0,2,division)],halfSample=.5*bpm/(60.*sampleRate);
+    const double steps[]={1.,.5,.25,.125},step=steps[jlimit(0,3,division)],halfSample=.5*bpm/(60.*sampleRate);
     double into=std::fmod(*beats,step);if(into<0)into+=step;
     samplesToGrid=(into<halfSample||step-into<halfSample)?0.:(step-into)*60./bpm*sampleRate;
    }
@@ -317,11 +320,14 @@ private:
    const double length=quarters[jlimit(1,10,sync)];step=jmax(20.,bpm)/60./length/sampleRate;
    if(beats){double into=std::fmod(*beats/length,1.);if(into<0)into+=1.;lfoPhase=into;}}
   modulation.shape=shape;modulation.step=step;
+  // LFO MAN: tells the voices whether LFO TRIG is held, and for how long (samples, at the start of this block).
+  modulation.manual=state.getRawParameterValue("lfoManual")->load()>.5f;
+  if(modulation.manual&&state.getRawParameterValue("lfoTrig")->load()>.5f){modulation.manualAge=manualCount;manualCount+=count;}else{manualCount=0;modulation.manualAge=-1;}
   for(int i=0;i<count;++i) {
    const float t=float(lfoPhase);modulation.phase[size_t(i)]=t;modulation.lfo[size_t(i)]=ModulationBus::wave(shape,t);lfoPhase+=step;if(lfoPhase>=1)lfoPhase-=1;
   }
  }
- ModulationBus modulation;double lfoPhase=0;
+ ModulationBus modulation;double lfoPhase=0,manualCount=0;
  std::atomic<bool> modified{false};
  std::atomic<int> currentProgram{0};
  GlideMemory previousClassic,previousJupiter;double sampleRate=44100;Arpeggiator arp;CharacterDelay echo;OrbitReverb reverb;NoteHold hold;

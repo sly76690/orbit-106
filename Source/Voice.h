@@ -37,6 +37,7 @@ private:
 // every voice reads the same value at the same sample.
 struct ModulationBus {
  std::vector<float> lfo,phase; int shape=0; double step=0; // value and phase per sample, waveform, cycles per sample
+ bool manual=false; double manualAge=-1; // LFO MAN: samples since LFO TRIG was pressed, -1 while it is up
  static float wave(int shape,float t){if(shape==1)return std::sin(t*MathConstants<float>::twoPi);if(shape==2)return 2*t-1;if(shape==3)return t<.5f?1.f:-1.f;return t<.25f?4*t:(t<.75f?2-4*t:4*t-4);}
 };
 
@@ -165,6 +166,7 @@ public:
   // LFO delay: after a new note the LFO stays out for the first part of the delay time, then fades in.
   // The mod wheel vibrato is not delayed.
   const float lfoDelay=p("lfoDelay")*float(sr),lfoHold=lfoDelay*.6f,lfoRamp=jmax(1.f,lfoDelay*.4f);
+  const float manualRate=1.f-std::exp(-1.f/(.015f*float(sr))); // LFO MAN: the LFO comes and goes over about 15 ms, never with a click
   const float tracking=std::pow(float(hz/261.625565),p("keytrack"));
   // VEL > FILTER: a softer note is darker, by up to four octaves; a full-velocity note is unchanged.
   const float velocityOpen=std::pow(2.f,p("velFilter")*4.f*(vel-1.f)),pressFilter=p("atFilter")*3.f,pressRate=1.f-std::exp(-1.f/(.01f*float(sr)));
@@ -199,7 +201,12 @@ public:
    else if(ownLfo){lfoOffset+=lfoDrift;lfoOffset-=std::floor(lfoOffset);t=bus.phase[size_t(start+i)]+float(lfoOffset);t-=std::floor(t);lfoNow=ModulationBus::wave(bus.shape,t);}
    if(envTrig&&held&&t<lfoLast-.5f){env.noteOn();filterEnv.noteOn();} // the LFO has just started a new cycle
    lfoLast=t;
-   const float modulation=lfoNow*(lfoDelay<1.f?1.f:jlimit(0.f,1.f,(lfoAge-lfoHold)/lfoRamp));
+   float lfoFade=lfoDelay<1.f?1.f:jlimit(0.f,1.f,(lfoAge-lfoHold)/lfoRamp);
+   if(bus.manual){ // LFO MAN: the delay runs from the press of LFO TRIG, not from the note
+    const float since=bus.manualAge<0?-1.f:float(bus.manualAge)+float(i);
+    const float target=since<0?0.f:(lfoDelay<1.f?1.f:jlimit(0.f,1.f,(since-lfoHold)/lfoRamp));
+    manualLevel+=manualRate*(target-manualLevel);lfoFade=manualLevel;}
+   const float modulation=lfoNow*lfoFade;
    if(lfoAge<1.e7f)lfoAge+=1.f;
    cutNow+=follow5ms*(cutoff-cutNow);cutBNow+=follow5ms*(cutoffB-cutBNow);levelNow+=follow5ms*(level-levelNow);layerNow+=follow5ms*(layer-layerNow);subNow+=follow5ms*(subLevel-subNow);noiseNow+=follow5ms*(noise-noiseNow);
    const bool gliding=pitch.isSmoothing();const double pitchNow=pitch.getNextValue(),frequency=gliding?std::exp2(pitchNow):hz; // exactly the note once the glide is over
@@ -250,7 +257,7 @@ private:
  float keyStretch=1,punch=0,dc=0;
  // Vintage envelopes and attack, to adjust by ear: time ratio per octave, length of the punch, its share of cutoff and of level.
  static constexpr float keyFollow=.85f,punchSeconds=.006f,punchCutoff=.4f,punchLevel=.25f;
- float pressure=0,pressureNow=0,lfoTune=0,lfoLast=0;double lfoOffset=0,trigPhase=0;bool held=false;
+ float pressure=0,pressureNow=0,lfoTune=0,lfoLast=0,manualLevel=0;double lfoOffset=0,trigPhase=0;bool held=false;
  static constexpr float lfoRateError=.12f; // LFO speed spread between voices at AGE = 10
  static constexpr float tuningError=6.f,driftCents=4.f,cutoffError=.12f,envelopeError=.15f,driftSeconds=.6f;
  // Tuning values for the high-pass switch: starting points to adjust by ear, not hardware measurements.

@@ -113,7 +113,7 @@ int main() {
  std::cout<<"PASS state restore\n";
  // Host pages: the panel order for controllers such as Push, every parameter present once, short names.
  {auto* first=dynamic_cast<juce::RangedAudioParameter*>(p->getParameters()[0]);auto* ninth=dynamic_cast<juce::RangedAudioParameter*>(p->getParameters()[8]);
-  if(!first||first->paramID!="wave"||!ninth||ninth->paramID!="oscLayer"||p->getParameters().size()!=91)return 74;
+  if(!first||first->paramID!="wave"||!ninth||ninth->paramID!="oscLayer"||p->getParameters().size()!=93)return 74;
   for(auto* b:p->getParameters())if(b->getName(100).length()>12){std::cerr<<"Parameter name too long for a controller: "<<b->getName(100)<<"\n";return 75;}}
  std::cout<<"PASS host pages of eight with short names\n";
  p->setRateAndBufferSizeDetails(48000,256);p->prepareToPlay(48000,256);
@@ -262,13 +262,18 @@ int main() {
    {{{"rate",6},{"decay",.05f},{"sustain",.2f}},{{"rate",6},{"decay",.05f},{"sustain",.2f},{"envLfoTrig",1}}},
    {{{"masterTune",0}},{{"masterTune",40}}},
    {{{"pwmSource",2}},{{"pwmSource",3}}},{{{"pwmSource",2},{"envLink",0},{"fdecay",.1f},{"fsustain",0}},{{"pwmSource",4},{"envLink",0},{"fdecay",.1f},{"fsustain",0}}},
-   {{{"vcaMode",0},{"envLink",0},{"fsustain",.1f}},{{"vcaMode",2},{"envLink",0},{"fsustain",.1f}}}};
+   {{{"vcaMode",0},{"envLink",0},{"fsustain",.1f}},{{"vcaMode",2},{"envLink",0},{"fsustain",.1f}}},
+   {{{"lfoFilter",2},{"rate",3},{"lfoManual",1}},{{"lfoFilter",2},{"rate",3},{"lfoManual",1},{"lfoTrig",1}}},
+   {{{"arpOn",1},{"arpDivision",2},{"arpGate",.5f}},{{"arpOn",1},{"arpDivision",3},{"arpGate",.5f}}},
+   {{{"lfoFilter",2},{"rate",11}},{{"lfoFilter",2},{"rate",19}}}};
   int n=0;for(auto& pr:pairs){++n;std::initializer_list<std::pair<const char*,float>> dummy{};(void)dummy;
    auto render=[&](const std::vector<std::pair<const char*,float>>& v){std::unique_ptr<juce::AudioProcessor> q(createPluginFilter());
     for(auto& kv:v)for(auto* b:q->getParameters())if(auto* r=dynamic_cast<juce::RangedAudioParameter*>(b))if(r->paramID==kv.first)r->setValueNotifyingHost(r->convertTo0to1(kv.second));
     q->setRateAndBufferSizeDetails(48000,256);q->prepareToPlay(48000,256);std::vector<float> out;
     for(int k=0;k<120;++k){juce::AudioBuffer<float> b(2,256);b.clear();juce::MidiBuffer m;if(k==0)m.addEvent(juce::MidiMessage::noteOn(1,52,.9f),0);q->processBlock(b,m);for(int i=0;i<256;++i)out.push_back(b.getSample(0,i));}return out;};
-   if(diff(render(pr.first),render(pr.second))<.01){std::cerr<<"Added control "<<n<<" has no effect\n";return 80;}}}
+   if(diff(render(pr.first),render(pr.second))<.01){std::cerr<<"Added control "<<n<<" has no effect\n";return 80;}
+   // LFO MAN, LFO TRIG up: the LFO is silent, so its rate no longer changes anything
+   if(n==int(pairs.size())&&diff(render({{"lfoFilter",2},{"rate",3},{"lfoManual",1}}),render({{"lfoFilter",2},{"rate",7},{"lfoManual",1}}))>1.e-4){std::cerr<<"LFO MAN without LFO TRIG still moves\n";return 81;}}}
  std::cout<<"PASS key trig, LFO sync, envelope trig, tune, PWM and VCA sources\n";
  // MIDI learn: an assignment kept with the session moves its parameter.
  {std::unique_ptr<juce::AudioProcessor> q(createPluginFilter());juce::MemoryBlock saved;q->getStateInformation(saved);auto xml=juce::AudioProcessor::getXmlFromBinary(saved.getData(),int(saved.getSize()));
