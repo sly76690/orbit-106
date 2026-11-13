@@ -113,7 +113,7 @@ int main() {
  std::cout<<"PASS state restore\n";
  // Host pages: the panel order for controllers such as Push, every parameter present once, short names.
  {auto* first=dynamic_cast<juce::RangedAudioParameter*>(p->getParameters()[0]);auto* ninth=dynamic_cast<juce::RangedAudioParameter*>(p->getParameters()[8]);
-  if(!first||first->paramID!="wave"||!ninth||ninth->paramID!="oscLayer"||p->getParameters().size()!=82)return 74;
+  if(!first||first->paramID!="wave"||!ninth||ninth->paramID!="oscLayer"||p->getParameters().size()!=86)return 74;
   for(auto* b:p->getParameters())if(b->getName(100).length()>12){std::cerr<<"Parameter name too long for a controller: "<<b->getName(100)<<"\n";return 75;}}
  std::cout<<"PASS host pages of eight with short names\n";
  p->setRateAndBufferSizeDetails(48000,256);p->prepareToPlay(48000,256);
@@ -242,6 +242,19 @@ int main() {
   if(diff(extendedRender({{"mode",0},{"voiceDrive",0}}),extendedRender({{"mode",0},{"voiceDrive",1}}))>1e-9){std::cerr<<"PRE drive changes the six-voice instrument\n";return 73;}
   if(diff(take(0,0,0),take(0,1,1))>1e-9){std::cerr<<"AGE or WIDTH changes the six-voice instrument\n";return 71;}}
  std::cout<<"PASS eight-voice age and width\n";
+ // Expression: VEL > FILTER darkens a soft note, key pressure (channel aftertouch) opens the filter when PRESS is up.
+ {auto play=[](float velFilter,float press,float velocity,int pressure){std::unique_ptr<juce::AudioProcessor> q(createPluginFilter());
+   for(auto* b:q->getParameters())if(auto* r=dynamic_cast<juce::RangedAudioParameter*>(b)){if(r->paramID=="velFilter")r->setValueNotifyingHost(velFilter);if(r->paramID=="atFilter")r->setValueNotifyingHost(press);if(r->paramID=="cutoff")r->setValueNotifyingHost(r->convertTo0to1(400));}
+   q->setRateAndBufferSizeDetails(48000,256);q->prepareToPlay(48000,256);double energy=0;
+   for(int n=0;n<60;++n){juce::AudioBuffer<float> b(2,256);b.clear();juce::MidiBuffer m;if(n==0)m.addEvent(juce::MidiMessage::noteOn(1,48,velocity),0);if(n==10&&pressure>0)m.addEvent(juce::MidiMessage::channelPressureChange(1,pressure),0);q->processBlock(b,m);
+    if(n>30)for(int i=1;i<256;++i){const float d=b.getSample(0,i)-b.getSample(0,i-1);energy+=d*d;}} // energy of the slope: grows with brightness
+   return energy;};
+  if(!(play(1,0,.3f,0)<play(0,0,.3f,0)*.8)){std::cerr<<"VEL > FILTER does not darken a soft note\n";return 76;}
+  if(!(play(0,1,1.f,127)>play(0,1,1.f,0)*1.25)){std::cerr<<"Key pressure does not open the filter\n";return 77;}}
+ std::cout<<"PASS velocity and pressure to filter\n";
+ if(diff(extendedRender({{"delayMix",.6f},{"reverbMix",.6f}}),extendedRender({{"delayMix",.6f},{"reverbMix",.6f},{"delayOn",0},{"reverbOn",0}}))<.01){std::cerr<<"Delay / reverb ON keys have no effect\n";return 78;}
+ if(diff(extendedRender({{"delayMix",0},{"reverbMix",0}}),extendedRender({{"delayMix",.6f},{"reverbMix",.6f},{"delayOn",0},{"reverbOn",0}}))>1e-6){std::cerr<<"Delay / reverb still heard when off\n";return 79;}
+ std::cout<<"PASS delay and reverb ON keys\n";
  // UI-only regression: resizing/rendering must not alter a patch or drop its live controls.
  juce::MemoryBlock stateBefore; p->getStateInformation(stateBefore);
  for (int width : {1280, 1600, 2400}) {

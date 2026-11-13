@@ -528,7 +528,7 @@ private:
   using namespace orbitui;
   // Controls are packed at a fixed pitch inside each section (one unit = one fader, 41 px); the width left over
   // becomes bare panel between the sections, so every group reads as a block and the row still spans the panel.
-  const float unit = 41.f, total = 5.6f + 6.2f + 8.7f + 5.6f + 7.f; const int gutter = roundToInt((float(contentW) - total * unit) / 4.f);
+  const float unit = 41.f, total = 5.6f + 6.2f + 9.6f + 5.6f + 7.f; const int gutter = roundToInt((float(contentW) - total * unit) / 4.f);
   int x = left;
   auto next = [this, &x, unit, gutter](const char* title, Colour colour, float units) {
    const Rectangle<int> area(x, panelY, roundToInt(units * unit), panelH); x += area.getWidth() + gutter;
@@ -540,11 +540,11 @@ private:
   cells = split(next("OSC II", amber, 6.2f), {.3f, 1, 1, .5f, 1.7f, 1.7f});
   addFader("oscLayer", "LEVEL", 0, cells[1]); addFader("osc2Width", "WIDTH", 0, cells[2]);
   addRowKnob("osc2Tune", "TUNE", cells[4].withTrimmedTop(32)); addRowKnob("detune", "FINE", cells[5].withTrimmedTop(32));
-  cells = split(next("FILTER A", teal, 8.7f), {.3f, .8f, 1, 1, 1, 1, .9f, .5f, 2.2f});
+  cells = split(next("FILTER A", teal, 9.6f), {.3f, .8f, 1, 1, 1, 1, .9f, .9f, .5f, 2.2f});
   addFader("hpf", "HPF", 0, cells[1]).slider.getProperties().set("marks", 3);
-  addFader("cutoff", "FREQ", 0, cells[2]); addFader("resonance", "RES", 0, cells[3]); addFader("env", "ENV", 0, cells[4]); addFader("lfoFilter", "LFO", 0, cells[5]); addFader("keytrack", "KYBD", 0, cells[6]);
-  addChoice("slope", "SLOPE", {"12 dB", "24 dB"}, 0, cells[8], true);
-  addChoice("filterAType", "MODEL", {"LADDER", "SVF"}, 0, cells[8].withTrimmedTop(100), true);
+  addFader("cutoff", "FREQ", 0, cells[2]); addFader("resonance", "RES", 0, cells[3]); addFader("env", "ENV", 0, cells[4]); addFader("lfoFilter", "LFO", 0, cells[5]); addFader("keytrack", "KYBD", 0, cells[6]); addFader("velFilter", "VEL", 0, cells[7]); // velocity opens both filters
+  addChoice("slope", "SLOPE", {"12 dB", "24 dB"}, 0, cells[9], true);
+  addChoice("filterAType", "MODEL", {"LADDER", "SVF"}, 0, cells[9].withTrimmedTop(100), true);
   cells = split(next("ENV / AMP", amber, 5.6f), {.3f, 1, 1, 1, 1, 1, .3f});
   addFader("attack", "A", 0, cells[1]); addFader("decay", "D", 0, cells[2]); addFader("sustain", "S", 0, cells[3]); addFader("release", "R", 0, cells[4]); addFader("velocity", "VEL", 0, cells[5]);
   cells = split(next("ENV / FILTER", amber, 7.f), {.3f, 1, 1, 1, 1, .5f, 2.2f});
@@ -601,9 +601,10 @@ private:
   const auto route = section("ROUTING", teal, routeW);
   caption("SIGNAL PATH", route.withHeight(16), 0);
   addChoice("filterRoute", "", {"A", "B", "A>B", "B>A", "PAR"}, 0, route.withHeight(120).withTrimmedTop(24), false);
-  cells = split(route.withTrimmedTop(110), {float(plain), float(plain), float(routeW - 2 * plain)});
+  cells = split(route.withTrimmedTop(110), {float(plain), float(plain), float(plain), float(routeW - 3 * plain)});
   addRowKnob("bendFilter", "BEND", cells[0]);
   addRowKnob("filterBlend", "A/B MIX", cells[1]);
+  addRowKnob("atFilter", "PRESS", cells[2]); // key pressure opens both filters, as the bender does with BEND
 
   // The chorus sits on the main panel, last block of the row, with orange caps of its own.
   const auto chorus = section("CHORUS", amber, chorusW);
@@ -649,13 +650,15 @@ private:
   addEffectScale("delayTime", cells[0]);
   place(*menuButtons.add(new ChoiceMenuButton(*orbit.state.getParameter("delaySync"))), {cells[0].getX() + 1, cells[0].getY() + 88, cells[0].getWidth() - 2, 24}, -1);
   addKnob("delayFeedback", "FDBK", cells[1], true); addKnob("delayMod", "MOD", cells[2], true); addKnob("delayMix", "LEVEL", cells[3], true);
+  addToggle("delayOn", "ON", -1, {cells[3].getX() + 2, cells[3].getY() + 80, cells[3].getWidth() - 4, 44}, 1, neutral); // switches the delay off without touching its settings
   // The reverb type (VINT / PLATE / SPACE) is chosen on the keys under the four knobs.
   cells = split(row.next("REVERB", teal, 4.6f), {1, 1, 1, 1});
   caption("SIZE", cells[0].withHeight(14), -1, 12.f);
   const int sizeWidth = jmin(50, cells[0].getWidth());
   addControl("reverbSize", Slider::RotaryHorizontalVerticalDrag, Rectangle<int>(cells[0].getCentreX() - sizeWidth / 2, cells[0].getY() + 15, sizeWidth, 54), -1);
   addEffectScale("reverbSize", cells[0]);
-  const auto reverbArea = cells[0].getUnion(cells[3]); // the three reverbs on lit keys, across the foot of the section
+  const auto reverbArea = cells[0].getUnion(cells[2]); // the three reverbs on lit keys, then ON, across the foot of the section
+  addToggle("reverbOn", "ON", -1, {cells[3].getX() + 2, cells[3].getY() + 80, cells[3].getWidth() - 4, 44}, 1, neutral);
   place(*choices.add(new ChoiceButtons(*orbit.state.getParameter("reverbType"), {"VINT", "PLATE", "SPACE"}, false, neutral)), {reverbArea.getX() + 2, reverbArea.getY() + 80, reverbArea.getWidth() - 4, 44}, -1);
   addKnob("reverbDamp", "DAMP", cells[1], true); addKnob("reverbColor", "COLOR", cells[2], true); addKnob("reverbMix", "LEVEL", cells[3], true);
   addKnob("gain", "VOLUME", row.next("OUTPUT", neutral, 1.3f));

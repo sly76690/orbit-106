@@ -47,7 +47,7 @@ public:
    "mode","voiceMode","age","voiceWidth","hold","chorusMode","chorus","gain",                  // VOICES, CHORUS, OUTPUT
    "arpOn","arpSync","arpPattern","arpDivision","arpOctaves","arpTempo","arpGate","fxDrive",    // ARPEGGIO
    "delayTime","delaySync","delayFeedback","delayMod","delayMix","reverbType","reverbSize","reverbDamp", // DELAY, REVERB
-   "reverbColor","reverbMix"};
+   "reverbColor","reverbMix","velFilter","atFilter","delayOn","reverbOn"};                                        // REVERB, EXPRESSION
   // Short names for the host and controller displays (Push shows about a dozen characters).
   static String label(const String& id,const String& longName){
    static const std::map<String,String> names{
@@ -61,7 +61,7 @@ public:
     {"mode","Voices"},{"voiceMode","Assign"},{"age","Age"},{"voiceWidth","Width"},{"hold","Hold"},{"chorusMode","Chorus"},{"chorus","Chorus Mix"},{"gain","Volume"},
     {"arpOn","Arp On"},{"arpSync","Arp Sync"},{"arpPattern","Arp Mode"},{"arpDivision","Arp Step"},{"arpOctaves","Arp Range"},{"arpTempo","Arp Tempo"},{"arpGate","Arp Gate"},{"fxDrive","Drive Post"},
     {"delayTime","Dly Time"},{"delaySync","Dly Sync"},{"delayFeedback","Dly Fdbk"},{"delayMod","Dly Mod"},{"delayMix","Dly Level"},{"reverbType","Rev Type"},{"reverbSize","Rev Size"},{"reverbDamp","Rev Damp"},
-    {"reverbColor","Rev Color"},{"reverbMix","Rev Level"}};
+    {"reverbColor","Rev Color"},{"reverbMix","Rev Level"},{"velFilter","Vel>Filter"},{"atFilter","Press>Filt"},{"delayOn","Dly On"},{"reverbOn","Rev On"}};
    const auto found=names.find(id);return found!=names.end()?found->second:longName;
   }
  static AudioProcessorValueTreeState::ParameterLayout parameters() {
@@ -124,6 +124,8 @@ public:
   add("bendFilter","Pitch bend to filter (octaves)",0,3,0);
   choice("voiceMode","Voice mode",{"Poly","Mono","Unison"});
   keep(std::make_unique<AudioParameterBool>(ParameterID{"legato",1},label("legato","Legato envelopes"),false));
+  keep(std::make_unique<AudioParameterBool>(ParameterID{"delayOn",1},label("delayOn","Delay on"),true));keep(std::make_unique<AudioParameterBool>(ParameterID{"reverbOn",1},label("reverbOn","Reverb on"),true));
+  add("velFilter","Velocity to filter",0,1,0);add("atFilter","Pressure to filter",0,1,0);
   add("voiceDrive","Voice drive",0,1,.3f);add("age","Age",0,1,.3f);add("voiceWidth","Voice width",0,1,.5f);
   add("unisonSpread","Unison detune (cents)",0,40,12);add("bendRange","Pitch bend (semitones)",0,24,2);
   choice("filterRoute","Filter routing",{"A only","B only","A > B","B > A","Parallel"});
@@ -190,7 +192,8 @@ public:
  const String getProgramName(int index) override {return isPositiveAndBelow(index,getNumPrograms())?patches()[size_t(index)].name:String();}
  void changeProgramName(int,const String&) override {}
  void prepareToPlay(double sr,int block) override {
-  arp.prepare(sr);hold.prepare();previousClassic=previousJupiter=0;modulation.lfo.assign(size_t(jmax(block,8192)),0.f);lfoPhase=0;
+  driveBlock=jmax(1,block);drivePass.reset();drivePass.initProcessing(size_t(driveBlock));
+  arp.prepare(sr);hold.prepare();previousClassic=previousJupiter=0;modulation.lfo.assign(size_t(jmax(block,8192)),0.f);modulation.phase.assign(modulation.lfo.size(),0.f);lfoPhase=0;
   sampleRate=sr;echo.prepare(sr);reverb.prepare(sr);
   synth.setCurrentPlaybackSampleRate(sr); for(int i=0;i<synth.getNumVoices();++i) static_cast<Voice*>(synth.getVoice(i))->prepare(sr);
   classic.setCurrentPlaybackSampleRate(sr); for(int i=0;i<classic.getNumVoices();++i) static_cast<Voice*>(classic.getVoice(i))->prepare(sr);
@@ -221,7 +224,15 @@ public:
   (mode==0?classic:synth).renderNextBlock(buffer,midi,0,buffer.getNumSamples());
   chorus.process(buffer,int(value("chorusMode")),value("chorus"));
   // Drive, then the echo.
-  if(const float drive=value("fxDrive");drive>0) for(int c=0;c<2;++c){auto* samples=buffer.getWritePointer(c);for(int i=0;i<buffer.getNumSamples();++i)samples[i]=std::tanh(samples[i]*(1+drive*9))/(1+drive*2);}
+  // POST drive at twice the sample rate, for the same reason as the voices: its overtones are filtered out, not folded back.
+  if(const float drive=value("fxDrive");drive>0&&buffer.getNumChannels()>=2){
+   dsp::AudioBlock<float> block(buffer.getArrayOfWritePointers(),2,size_t(buffer.getNumSamples()));
+   for(size_t done=0;done<block.getNumSamples();done+=size_t(driveBlock)){ // in pieces no longer than prepared for
+    auto piece=block.getSubBlock(done,jmin(size_t(driveBlock),block.getNumSamples()-done));auto up=drivePass.processSamplesUp(piece);
+    for(size_t c=0;c<up.getNumChannels();++c){auto* samples=up.getChannelPointer(c);for(size_t i=0;i<up.getNumSamples();++i)samples[i]=std::tanh(samples[i]*(1+drive*9))/(1+drive*2);}
+    drivePass.processSamplesDown(piece);
+   }
+  }
   // Delay time: the TIME knob when free, otherwise a note value at the host tempo (the arpeggio TEMPO knob when there is no host).
   float delaySeconds=value("delayTime");
   if(const int syncStep=int(value("delaySync"));syncStep>0) {
@@ -232,10 +243,14 @@ public:
    while(seconds>1.5)seconds*=.5; // longer than the delay line: fall back to half the value
    delaySeconds=float(seconds);
   }
-  echo.process(buffer,delaySeconds,value("delayFeedback"),value("delayMix"),value("delayMod"));
-  reverb.process(buffer,int(value("reverbType")),value("reverbSize"),value("reverbDamp"),value("reverbColor"),value("reverbMix"));
+  // ON keys: off fades the effect out (as its LEVEL at zero would) and leaves every setting where it is.
+  echo.process(buffer,delaySeconds,value("delayFeedback"),value("delayOn")>.5f?value("delayMix"):0.f,value("delayMod"));
+  reverb.process(buffer,int(value("reverbType")),value("reverbSize"),value("reverbDamp"),value("reverbColor"),value("reverbOn")>.5f?value("reverbMix"):0.f);
   gain.setTargetValue(state.getRawParameterValue("gain")->load());
-  for(int i=0;i<buffer.getNumSamples();++i) {float g=gain.getNextValue();for(int c=0;c<buffer.getNumChannels();++c) buffer.setSample(c,i,std::tanh(buffer.getSample(c,i)*g));}
+  // Output: untouched up to the knee, then rounded off towards full scale, so loud passages never clip but normal
+  // levels keep all their punch (a saturation applied everywhere used to soften every note a little).
+  const auto limit=[](float x){constexpr float knee=.7f;const float a=std::abs(x);if(a<=knee)return x;return std::copysign(knee+(1.f-knee)*std::tanh((a-knee)/(1.f-knee)),x);};
+  for(int i=0;i<buffer.getNumSamples();++i) {float g=gain.getNextValue();for(int c=0;c<buffer.getNumChannels();++c) buffer.setSample(c,i,limit(buffer.getSample(c,i)*g));}
  }
  bool hasEditor() const override {return true;} AudioProcessorEditor* createEditor() override;
  void getStateInformation(MemoryBlock& dest) override {auto saved=state.copyState();saved.setProperty("program",currentProgram.load(),nullptr);saved.setProperty("modified",modified.load(),nullptr);auto xml=saved.createXml();copyXmlToBinary(*xml,dest);}
@@ -253,19 +268,18 @@ private:
  void parameterChanged(const String&,float) override {modified.store(true);}
  // The single LFO shared by all voices: free-running, one value per sample of the current block.
  void renderLfo(int count) {
-  if(int(modulation.lfo.size())<count) modulation.lfo.resize(size_t(count));
-  const int shape=int(state.getRawParameterValue("lfoShape")->load());const double step=state.getRawParameterValue("rate")->load()/sampleRate;
+  if(int(modulation.lfo.size())<count){modulation.lfo.resize(size_t(count));}
+  if(modulation.phase.size()<modulation.lfo.size())modulation.phase.resize(modulation.lfo.size());
+  const int shape=int(state.getRawParameterValue("lfoShape")->load());const double step=state.getRawParameterValue("rate")->load()/sampleRate;modulation.shape=shape;modulation.step=step;
   for(int i=0;i<count;++i) {
-   const float t=float(lfoPhase);float v=t<.25f?4*t:(t<.75f?2-4*t:4*t-4);
-   if(shape==1)v=std::sin(t*MathConstants<float>::twoPi);else if(shape==2)v=2*t-1;else if(shape==3)v=t<.5f?1.f:-1.f;
-   modulation.lfo[size_t(i)]=v;lfoPhase+=step;if(lfoPhase>=1)lfoPhase-=1;
+   const float t=float(lfoPhase);modulation.phase[size_t(i)]=t;modulation.lfo[size_t(i)]=ModulationBus::wave(shape,t);lfoPhase+=step;if(lfoPhase>=1)lfoPhase-=1;
   }
  }
  ModulationBus modulation;double lfoPhase=0;
  std::atomic<bool> modified{false};
  std::atomic<int> currentProgram{0};
  GlideMemory previousClassic,previousJupiter;double sampleRate=44100;Arpeggiator arp;CharacterDelay echo;OrbitReverb reverb;NoteHold hold;
- VoiceAllocator synth,classic;EnsembleChorus chorus;SmoothedValue<float> gain;int lastMode=-1;
+ VoiceAllocator synth,classic;EnsembleChorus chorus;dsp::Oversampling<float> drivePass{2,1,dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,true,false};int driveBlock=512;SmoothedValue<float> gain;int lastMode=-1;
 };
 #include "Editor.h"
 AudioProcessorEditor* Orbit::createEditor(){return new Editor(*this);}
