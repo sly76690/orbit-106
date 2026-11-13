@@ -1,6 +1,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_dsp/juce_dsp.h>
 #include <map>
+#include <optional>
 
 using namespace juce;
 #include "Arpeggiator.h"
@@ -16,7 +17,7 @@ struct Sound : SynthesiserSound {
 };
 #include "Voice.h"
 #include "VoiceAllocator.h"
-class Orbit : public AudioProcessor, private AudioProcessorValueTreeState::Listener {
+class Orbit : public AudioProcessor, private AudioProcessorValueTreeState::Listener, private AudioProcessorListener {
 public:
  AudioProcessorValueTreeState state;
  MidiKeyboardState keyboard;
@@ -24,9 +25,10 @@ public:
   for(int i=0;i<8;++i){auto* voice=new Voice(state,previousJupiter,modulation);voice->setNoiseSeed(1001+i);voice->setVintage(i);synth.addVoice(voice);} synth.addSound(new Sound()); synth.setNoteStealingEnabled(true);
   for(int i=0;i<6;++i){auto* voice=new Voice(state,previousClassic,modulation);voice->setNoiseSeed(2001+i);classic.addVoice(voice);} classic.addSound(new Sound());classic.setNoteStealingEnabled(true);
   for(auto* param:getParameters()) if(auto* identified=dynamic_cast<AudioProcessorParameterWithID*>(param)) state.addParameterListener(identified->paramID,this);
-  state.state.setProperty("stateVersion",3,nullptr);
+  state.state.setProperty("stateVersion",4,nullptr);
+  for(auto& slot:ccTarget)slot.store(-1);addListener(this);
  }
- ~Orbit() override {for(auto* param:getParameters()) if(auto* identified=dynamic_cast<AudioProcessorParameterWithID*>(param)) state.removeParameterListener(identified->paramID,this);}
+ ~Orbit() override {removeListener(this);for(auto* param:getParameters()) if(auto* identified=dynamic_cast<AudioProcessorParameterWithID*>(param)) state.removeParameterListener(identified->paramID,this);}
  String userPresetName() const {return state.state.getProperty("userPresetName").toString();}
  // User presets live in the user's library, so they survive moving or rebuilding the project.
  static File presetRoot(){return File::getSpecialLocation(File::userApplicationDataDirectory).getChildFile("Application Support").getChildFile("SF Instruments").getChildFile("Orbit 106");}
@@ -37,23 +39,24 @@ public:
  bool isPatchModified() const {return modified.load();}
   // Host pages of eight, in the order of the front panel.
   static constexpr const char* hostPages[]={
-   "wave","width","pwm","sub","noise","osc1Shape","osc1Octave","osc1Level",                    // OSC I
-   "oscLayer","osc2Width","osc2Tune","detune","osc2Shape","osc2Octave","oscSync","crossMod",     // OSC II
-   "cutoff","resonance","env","keytrack","lfoFilter","hpf","slope","filterAType",               // FILTER A
-   "attack","decay","sustain","release","velocity","vcaMode","portamento","legato",            // AMP
-   "fattack","fdecay","fsustain","frelease","envLink","envInvert","envPitch","pwmSource",       // FILTER ENVELOPE
-   "rate","lfoDelay","lfoShape","lfoPitch","wheelDepth","bendRange","bendFilter","unisonSpread",// LFO, BEND
-   "filterBType","cutoffB","resonanceB","envB","slopeB","filterRoute","filterBlend","voiceDrive",// FILTER B, ROUTING
-   "mode","voiceMode","age","voiceWidth","hold","chorusMode","chorus","gain",                  // VOICES, CHORUS, OUTPUT
-   "arpOn","arpSync","arpPattern","arpDivision","arpOctaves","arpTempo","arpGate","fxDrive",    // ARPEGGIO
-   "delayTime","delaySync","delayFeedback","delayMod","delayMix","reverbType","reverbSize","reverbDamp", // DELAY, REVERB
-   "reverbColor","reverbMix","velFilter","atFilter","delayOn","reverbOn"};                                        // REVERB, EXPRESSION
+   "wave","width","pwm","sub","noise","osc1Shape","osc1Octave","osc1Level",                      // OSC I
+   "oscLayer","osc2Width","osc2Tune","detune","osc2Shape","osc2Octave","oscSync","crossMod",       // OSC II
+   "cutoff","resonance","env","keytrack","lfoFilter","hpfFreq","slope","filterAType",             // FILTER A
+   "attack","decay","sustain","release","velocity","vcaMode","portamento","legato",              // AMP
+   "fattack","fdecay","fsustain","frelease","envLink","envInvert","envPitch","pwmSource",         // FILTER ENVELOPE
+   "rate","lfoSync","lfoDelay","lfoShape","lfoKeyTrig","envLfoTrig","lfoPitch","wheelDepth",      // LFO
+   "wheelFilter","velFilter","atFilter","bendRange","bendFilter","unisonSpread","masterTune","gain",// EXPRESSION, TUNE, VOLUME
+   "filterBType","cutoffB","resonanceB","envB","slopeB","filterRoute","filterBlend","voiceDrive",  // FILTER B, ROUTING
+   "mode","voiceMode","age","voiceWidth","hold","chorusMode","chorus","fxDrive",                  // VOICES, CHORUS
+   "arpOn","arpSync","arpPattern","arpDivision","arpOctaves","arpTempo","arpGate","delayOn",      // ARPEGGIO
+   "delayTime","delaySync","delayFeedback","delayMod","delayMix","reverbOn","reverbType","reverbSize", // DELAY, REVERB
+   "reverbDamp","reverbColor","reverbMix"};                                        // REVERB, EXPRESSION
   // Short names for the host and controller displays (Push shows about a dozen characters).
   static String label(const String& id,const String& longName){
    static const std::map<String,String> names{
     {"wave","Osc1 SawPls"},{"width","Osc1 Width"},{"pwm","Osc1 PWM"},{"sub","Sub Level"},{"noise","Noise"},{"osc1Shape","Osc1 Wave"},{"osc1Octave","Osc1 Octave"},{"osc1Level","Osc1 Level"},
     {"oscLayer","Osc2 Level"},{"osc2Width","Osc2 Width"},{"osc2Tune","Osc2 Tune"},{"detune","Osc2 Fine"},{"osc2Shape","Osc2 Wave"},{"osc2Octave","Osc2 Octave"},{"oscSync","Osc2 Sync"},{"crossMod","X-Mod"},
-    {"cutoff","A Freq"},{"resonance","A Reso"},{"env","A Env"},{"keytrack","Filter Kybd"},{"lfoFilter","Filter LFO"},{"hpf","HPF"},{"slope","A Slope"},{"filterAType","A Model"},
+    {"cutoff","A Freq"},{"resonance","A Reso"},{"env","A Env"},{"keytrack","Filter Kybd"},{"lfoFilter","Filter LFO"},{"hpfFreq","HPF"},{"slope","A Slope"},{"filterAType","A Model"},
     {"attack","Amp Attack"},{"decay","Amp Decay"},{"sustain","Amp Sustain"},{"release","Amp Release"},{"velocity","Velocity"},{"vcaMode","VCA Mode"},{"portamento","Portamento"},{"legato","Legato"},
     {"fattack","Flt Attack"},{"fdecay","Flt Decay"},{"fsustain","Flt Sustain"},{"frelease","Flt Release"},{"envLink","Flt Env Src"},{"envInvert","A Env Pol"},{"envPitch","Env>Pitch"},{"pwmSource","PWM Source"},
     {"rate","LFO Rate"},{"lfoDelay","LFO Delay"},{"lfoShape","LFO Wave"},{"lfoPitch","LFO Pitch"},{"wheelDepth","Wheel Vib"},{"bendRange","Bend Range"},{"bendFilter","Bend>Filter"},{"unisonSpread","Uni Spread"},
@@ -61,7 +64,7 @@ public:
     {"mode","Voices"},{"voiceMode","Assign"},{"age","Age"},{"voiceWidth","Width"},{"hold","Hold"},{"chorusMode","Chorus"},{"chorus","Chorus Mix"},{"gain","Volume"},
     {"arpOn","Arp On"},{"arpSync","Arp Sync"},{"arpPattern","Arp Mode"},{"arpDivision","Arp Step"},{"arpOctaves","Arp Range"},{"arpTempo","Arp Tempo"},{"arpGate","Arp Gate"},{"fxDrive","Drive Post"},
     {"delayTime","Dly Time"},{"delaySync","Dly Sync"},{"delayFeedback","Dly Fdbk"},{"delayMod","Dly Mod"},{"delayMix","Dly Level"},{"reverbType","Rev Type"},{"reverbSize","Rev Size"},{"reverbDamp","Rev Damp"},
-    {"reverbColor","Rev Color"},{"reverbMix","Rev Level"},{"velFilter","Vel>Filter"},{"atFilter","Press>Filt"},{"delayOn","Dly On"},{"reverbOn","Rev On"}};
+    {"reverbColor","Rev Color"},{"reverbMix","Rev Level"},{"velFilter","Vel>Filter"},{"atFilter","Press>Filt"},{"delayOn","Dly On"},{"reverbOn","Rev On"},{"lfoSync","LFO Sync"},{"lfoKeyTrig","LFO KeyTrig"},{"envLfoTrig","Env LFO Trig"},{"wheelFilter","Wheel>Filt"},{"masterTune","Master Tune"}};
    const auto found=names.find(id);return found!=names.end()?found->second:longName;
   }
  static AudioProcessorValueTreeState::ParameterLayout parameters() {
@@ -93,7 +96,7 @@ public:
   add("attack","Attack (s)",0.002f,5,0.02f,0.35f);add("decay","Decay (s)",0.01f,5,0.6f,0.4f);add("sustain","Sustain",0,1,0.7f);add("release","Release (s)",0.01f,8,0.8f,0.4f);
   add("rate","LFO (Hz)",0.05f,12,0.6f,0.4f);add("pwm","PWM depth",0,1,0.3f);add("chorus","Chorus",0,1,0.35f);add("gain","Output",0,1,0.7f);
   add("fattack","Filter attack",0.002f,5,0.02f,0.35f);add("fdecay","Filter decay",0.01f,5,0.6f,0.4f);add("fsustain","Filter sustain",0,1,0.3f);add("frelease","Filter release",0.01f,8,0.8f,0.4f);
-  keep(std::make_unique<AudioParameterChoice>(ParameterID{"hpf",1},label("hpf","High-pass"),StringArray{"0 BASS BOOST","1 FLAT","2","3"},1));add("keytrack","Filter key track",0,1,0.5f);add("noise","Noise",0,1,0);add("velocity","Velocity",0,1,0);
+  add("hpfFreq","High-pass",0,1,.25f); /* bass boost below a quarter, flat, then a rising high-pass */ add("keytrack","Filter key track",0,1,0.5f);add("noise","Noise",0,1,0);add("velocity","Velocity",0,1,0);
   keep(std::make_unique<AudioParameterChoice>(ParameterID{"slope",1},label("slope","Filter A slope"),StringArray{"12 dB","24 dB"},1));
   keep(std::make_unique<AudioParameterChoice>(ParameterID{"chorusMode",1},label("chorusMode","Chorus mode"),StringArray{"OFF","I","II","I+II"},1));
   add("portamento","Portamento (s)",0,2,0,0.4f);
@@ -120,12 +123,16 @@ public:
   choice("reverbType","Reverb type",{"VINT","PLATE","SPACE"});
   choice("delaySync","Delay sync",{"FREE","1/2","1/4 D","1/4","1/4 T","1/8 D","1/8","1/8 T","1/16 D","1/16","1/16 T"});
   keep(std::make_unique<AudioParameterBool>(ParameterID{"hold",1},label("hold","Hold"),false));keep(std::make_unique<AudioParameterBool>(ParameterID{"oscSync",1},label("oscSync","Oscillator II sync"),false));add("crossMod","Cross modulation II > I",0,1,0);
-  choice("vcaMode","VCA mode",{"Envelope","Gate"});choice("envInvert","Filter A envelope polarity",{"Normal","Inverted"});choice("pwmSource","PWM source",{"LFO","Manual","Envelope"});
+  choice("vcaMode","VCA mode",{"Envelope","Gate","Filter envelope"});choice("envInvert","Filter A envelope polarity",{"Normal","Inverted"});choice("pwmSource","PWM source",{"LFO","Manual","Envelope","Envelope inverted","Amp envelope","Amp envelope inverted"});
   add("bendFilter","Pitch bend to filter (octaves)",0,3,0);
   choice("voiceMode","Voice mode",{"Poly","Mono","Unison"});
   keep(std::make_unique<AudioParameterBool>(ParameterID{"legato",1},label("legato","Legato envelopes"),false));
   keep(std::make_unique<AudioParameterBool>(ParameterID{"delayOn",1},label("delayOn","Delay on"),true));keep(std::make_unique<AudioParameterBool>(ParameterID{"reverbOn",1},label("reverbOn","Reverb on"),true));
-  add("velFilter","Velocity to filter",0,1,0);add("atFilter","Pressure to filter",0,1,0);
+  add("velFilter","Velocity to filter",0,1,0);
+  keep(std::make_unique<AudioParameterBool>(ParameterID{"lfoKeyTrig",1},label("lfoKeyTrig","LFO key trigger"),false));
+  keep(std::make_unique<AudioParameterBool>(ParameterID{"envLfoTrig",1},label("envLfoTrig","Envelopes on LFO cycle"),false));
+  keep(std::make_unique<AudioParameterChoice>(ParameterID{"lfoSync",1},label("lfoSync","LFO sync"),StringArray{"FREE","4 BARS","2 BARS","1 BAR","1/2","1/4","1/8","1/16","1/4 T","1/8 T","1/16 T"},0));
+  add("wheelFilter","Mod wheel to filter",0,1,0);add("masterTune","Master tune (cents)",-50,50,0);add("atFilter","Pressure to filter",0,1,0);
   add("voiceDrive","Voice drive",0,1,.3f);add("age","Age",0,1,.3f);add("voiceWidth","Voice width",0,1,.5f);
   add("unisonSpread","Unison detune (cents)",0,40,12);add("bendRange","Pitch bend (semitones)",0,24,2);
   choice("filterRoute","Filter routing",{"A only","B only","A > B","B > A","Parallel"});
@@ -204,6 +211,12 @@ public:
  bool isBusesLayoutSupported(const BusesLayout& b) const override {return b.getMainOutputChannelSet()==AudioChannelSet::stereo();}
  void processBlock(AudioBuffer<float>& buffer,MidiBuffer& midi) override {
   ScopedNoDenormals noDenormals;buffer.clear();keyboard.processNextMidiBuffer(midi,0,buffer.getNumSamples(),true);
+  // MIDI learn and learned controls. The mod wheel, sustain, bank select and channel messages keep their own jobs.
+  for(const auto event:midi){const auto message=event.getMessage();if(!message.isController())continue;
+   const int cc=message.getControllerNumber();if(cc==0||cc==1||cc==32||cc==64||cc>=120)continue;
+   if(learning.load()&&lastTouched.load()>=0){const int target=lastTouched.load();forget(target);ccTarget[size_t(cc)].store(target);learning.store(false);}
+   const int target=ccTarget[size_t(cc)].load();if(isPositiveAndBelow(target,getParameters().size()))getParameters()[target]->setValueNotifyingHost(float(message.getControllerValue())/127.f);
+  }
   auto value=[this](const char* key){return state.getRawParameterValue(key)->load();};
   hold.process(midi,value("hold")>.5f);
   double bpm=value("arpTempo"),samplesToGrid=-1;const int division=int(value("arpDivision"));
@@ -220,7 +233,9 @@ public:
   int mode=state.getRawParameterValue("mode")->load()>0.5f?1:0;
   synth.updateMode();classic.updateMode();
   if(mode!=lastMode) {synth.allNotesOff(0,false);classic.allNotesOff(0,false);lastMode=mode;}
-  renderLfo(buffer.getNumSamples());
+  double lfoBpm=value("arpTempo");std::optional<double> lfoBeats;
+  if(auto* playHead=getPlayHead()) if(auto position=playHead->getPosition()){if(auto hostBpm=position->getBpm())lfoBpm=*hostBpm;if(position->getIsPlaying())if(auto beats=position->getPpqPosition())lfoBeats=*beats;}
+  renderLfo(buffer.getNumSamples(),lfoBpm,lfoBeats);
   (mode==0?classic:synth).renderNextBlock(buffer,midi,0,buffer.getNumSamples());
   chorus.process(buffer,int(value("chorusMode")),value("chorus"));
   // Drive, then the echo.
@@ -253,24 +268,55 @@ public:
   for(int i=0;i<buffer.getNumSamples();++i) {float g=gain.getNextValue();for(int c=0;c<buffer.getNumChannels();++c) buffer.setSample(c,i,limit(buffer.getSample(c,i)*g));}
  }
  bool hasEditor() const override {return true;} AudioProcessorEditor* createEditor() override;
- void getStateInformation(MemoryBlock& dest) override {auto saved=state.copyState();saved.setProperty("program",currentProgram.load(),nullptr);saved.setProperty("modified",modified.load(),nullptr);auto xml=saved.createXml();copyXmlToBinary(*xml,dest);}
- void setStateInformation(const void* data,int size) override {auto xml=getXmlFromBinary(data,size);if(xml && xml->hasTagName(state.state.getType())) {auto restored=ValueTree::fromXml(*xml);
+ void getStateInformation(MemoryBlock& dest) override {auto saved=state.copyState();saved.setProperty("program",currentProgram.load(),nullptr);saved.setProperty("modified",modified.load(),nullptr);auto xml=saved.createXml();
+  auto* map=xml->createNewChildElement("MidiMap");for(int cc=0;cc<128;++cc)if(const int index=ccTarget[size_t(cc)].load();index>=0){auto* entry=map->createNewChildElement("Map");entry->setAttribute("cc",cc);entry->setAttribute("id",parameterId(index));}
+  copyXmlToBinary(*xml,dest);}
+ // ---- MIDI learn: one CC per control. Learning: touch a control on the panel, then move a knob on the controller.
+ void startLearning(){lastTouched.store(-1);learning.store(true);}
+ void stopLearning(){learning.store(false);}
+ bool isLearning() const {return learning.load();}
+ int lastTouchedParameter() const {return lastTouched.load();}
+ int ccFor(int index) const {for(int cc=0;cc<128;++cc)if(ccTarget[size_t(cc)].load()==index)return cc;return -1;}
+ void forget(int index){for(auto& slot:ccTarget)if(slot.load()==index)slot.store(-1);}
+ void forgetAll(){for(auto& slot:ccTarget)slot.store(-1);}
+ String parameterId(int index) const {if(auto* p=dynamic_cast<RangedAudioParameter*>(getParameters()[index]))return p->paramID;return {};}
+ int parameterIndex(const String& id) const {for(int i=0;i<getParameters().size();++i)if(parameterId(i)==id)return i;return -1;}
+ void setStateInformation(const void* data,int size) override {auto xml=getXmlFromBinary(data,size);if(xml && xml->hasTagName(state.state.getType())) {
+   // MIDI learn assignments belong to this instance, not to a sound: they are restored with a session, and a preset
+   // (which never contains them) leaves them as they are.
+   if(auto* map=xml->getChildByName("MidiMap")){for(auto& slot:ccTarget)slot.store(-1);
+    for(auto* entry:map->getChildIterator()){const int cc=entry->getIntAttribute("cc",-1);const int index=parameterIndex(entry->getStringAttribute("id"));if(isPositiveAndBelow(cc,128)&&index>=0)ccTarget[size_t(cc)].store(index);}
+    xml->removeChildElement(map,true);}
+   auto restored=ValueTree::fromXml(*xml);
    // Sessions and presets saved before state version 2 stored chorus mode as 0 = I, 1 = II.
    if(int(restored.getProperty("stateVersion",1))<2){for(auto child:restored)if(child.getProperty("id").toString()=="chorusMode")child.setProperty("value",float(child.getProperty("value"))+1.f,nullptr);}
    // Before state version 3 the high-pass was a continuous cutoff in Hz; it is now a four-position switch.
    if(int(restored.getProperty("stateVersion",1))<3){for(auto child:restored)if(child.getProperty("id").toString()=="hpf"){const float hz=float(child.getProperty("value"));child.setProperty("value",hz<100.f?1.f:(hz<480.f?2.f:3.f),nullptr);}}
-   restored.setProperty("stateVersion",3,nullptr);
+   // Before state version 4 the high-pass was a four-position switch; it is now one continuous fader (hpfFreq).
+   if(int(restored.getProperty("stateVersion",1))<4){for(auto child:restored)if(child.getProperty("id").toString()=="hpf"){static const float positions[]={0.f,.25f,.676f,.922f};
+    ValueTree moved("PARAM");moved.setProperty("id","hpfFreq",nullptr);moved.setProperty("value",positions[jlimit(0,3,int(child.getProperty("value")))],nullptr);restored.addChild(moved,-1,nullptr);break;}}
+   restored.setProperty("stateVersion",4,nullptr);
    currentProgram.store(jlimit(0,getNumPrograms()-1,int(restored.getProperty("program",0))));for(auto* base:getParameters())if(auto* parameter=dynamic_cast<RangedAudioParameter*>(base)) {
    bool found=false;for(auto child:restored)if(child.getProperty("id").toString()==parameter->paramID){found=true;break;}
    if(!found){ValueTree child("PARAM");child.setProperty("id",parameter->paramID,nullptr);child.setProperty("value",parameter->convertFrom0to1(parameter->getDefaultValue()),nullptr);restored.addChild(child,-1,nullptr);}
   }state.replaceState(restored);modified.store(bool(restored.getProperty("modified",false)));}}
 private:
  void parameterChanged(const String&,float) override {modified.store(true);}
+ void audioProcessorParameterChanged(AudioProcessor*,int,float) override {}
+ void audioProcessorChanged(AudioProcessor*,const AudioProcessorListener::ChangeDetails&) override {}
+ void audioProcessorParameterChangeGestureBegin(AudioProcessor*,int index) override {lastTouched.store(index);} // the control just touched on the panel
+ std::array<std::atomic<int>,128> ccTarget;std::atomic<bool> learning{false};std::atomic<int> lastTouched{-1};
  // The single LFO shared by all voices: free-running, one value per sample of the current block.
- void renderLfo(int count) {
+ void renderLfo(int count,double bpm,std::optional<double> beats) {
   if(int(modulation.lfo.size())<count){modulation.lfo.resize(size_t(count));}
   if(modulation.phase.size()<modulation.lfo.size())modulation.phase.resize(modulation.lfo.size());
-  const int shape=int(state.getRawParameterValue("lfoShape")->load());const double step=state.getRawParameterValue("rate")->load()/sampleRate;modulation.shape=shape;modulation.step=step;
+  const int shape=int(state.getRawParameterValue("lfoShape")->load());double step=state.getRawParameterValue("rate")->load()/sampleRate;
+  // LFO SYNC: one cycle lasts a note value at the host tempo (the arpeggio TEMPO without a host); while the host plays,
+  // the cycle is also lined up with its bars.
+  if(const int sync=int(state.getRawParameterValue("lfoSync")->load());sync>0){static const double quarters[]={0,16,8,4,2,1,.5,.25,2./3.,1./3.,1./6.};
+   const double length=quarters[jlimit(1,10,sync)];step=jmax(20.,bpm)/60./length/sampleRate;
+   if(beats){double into=std::fmod(*beats/length,1.);if(into<0)into+=1.;lfoPhase=into;}}
+  modulation.shape=shape;modulation.step=step;
   for(int i=0;i<count;++i) {
    const float t=float(lfoPhase);modulation.phase[size_t(i)]=t;modulation.lfo[size_t(i)]=ModulationBus::wave(shape,t);lfoPhase+=step;if(lfoPhase>=1)lfoPhase-=1;
   }

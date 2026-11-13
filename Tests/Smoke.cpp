@@ -113,7 +113,7 @@ int main() {
  std::cout<<"PASS state restore\n";
  // Host pages: the panel order for controllers such as Push, every parameter present once, short names.
  {auto* first=dynamic_cast<juce::RangedAudioParameter*>(p->getParameters()[0]);auto* ninth=dynamic_cast<juce::RangedAudioParameter*>(p->getParameters()[8]);
-  if(!first||first->paramID!="wave"||!ninth||ninth->paramID!="oscLayer"||p->getParameters().size()!=86)return 74;
+  if(!first||first->paramID!="wave"||!ninth||ninth->paramID!="oscLayer"||p->getParameters().size()!=91)return 74;
   for(auto* b:p->getParameters())if(b->getName(100).length()>12){std::cerr<<"Parameter name too long for a controller: "<<b->getName(100)<<"\n";return 75;}}
  std::cout<<"PASS host pages of eight with short names\n";
  p->setRateAndBufferSizeDetails(48000,256);p->prepareToPlay(48000,256);
@@ -183,8 +183,8 @@ int main() {
   if(opened<closed*3+.01){std::cerr<<"Ladder filter envelope is too slow: "<<closed<<" -> "<<opened<<"\n";return 46;}
   std::cout<<"PASS shared LFO delay and immediate ladder filter envelope\n";
   // High-pass switch: every position must sound different from the flat one, and low notes must lose level in 2 and 3.
-  auto level=[&](float position){auto audio=extendedRender({{"hpf",position},{"osc1Shape",4},{"oscLayer",0},{"sub",0},{"cutoff",18000},{"attack",.002f},{"sustain",1}});double sum=0;for(int i=2000;i<6000;++i)sum+=std::abs(audio[size_t(i)]);return sum;};
-  const double boosted=level(0),flat=level(1),thin=level(2),thinner=level(3);
+  auto level=[&](float position){auto audio=extendedRender({{"hpfFreq",position},{"osc1Shape",4},{"oscLayer",0},{"sub",0},{"cutoff",18000},{"attack",.002f},{"sustain",1}});double sum=0;for(int i=2000;i<6000;++i)sum+=std::abs(audio[size_t(i)]);return sum;};
+  const double boosted=level(0),flat=level(.25f),thin=level(.676f),thinner=level(.922f);
   if(!(boosted>flat*1.02&&flat>thin*1.02&&thin>thinner*1.02)){std::cerr<<"High-pass positions out of order: "<<boosted<<" "<<flat<<" "<<thin<<" "<<thinner<<"\n";return 47;}
   std::cout<<"PASS four-position high-pass: bass boost, flat, two cuts\n";
   // Gate mode, inverted filter envelope and the three PWM sources must each change the sound; chorus I+II must be a third colour.
@@ -255,6 +255,30 @@ int main() {
  if(diff(extendedRender({{"delayMix",.6f},{"reverbMix",.6f}}),extendedRender({{"delayMix",.6f},{"reverbMix",.6f},{"delayOn",0},{"reverbOn",0}}))<.01){std::cerr<<"Delay / reverb ON keys have no effect\n";return 78;}
  if(diff(extendedRender({{"delayMix",0},{"reverbMix",0}}),extendedRender({{"delayMix",.6f},{"reverbMix",.6f},{"delayOn",0},{"reverbOn",0}}))>1e-6){std::cerr<<"Delay / reverb still heard when off\n";return 79;}
  std::cout<<"PASS delay and reverb ON keys\n";
+ // The added controls each change the sound.
+ {const std::vector<std::pair<std::vector<std::pair<const char*,float>>,std::vector<std::pair<const char*,float>>>> pairs={
+   {{{"lfoFilter",2},{"rate",3}},{{"lfoFilter",2},{"rate",3},{"lfoKeyTrig",1}}},
+   {{{"lfoFilter",2},{"rate",3}},{{"lfoFilter",2},{"rate",3},{"lfoSync",6}}},
+   {{{"rate",6},{"decay",.05f},{"sustain",.2f}},{{"rate",6},{"decay",.05f},{"sustain",.2f},{"envLfoTrig",1}}},
+   {{{"masterTune",0}},{{"masterTune",40}}},
+   {{{"pwmSource",2}},{{"pwmSource",3}}},{{{"pwmSource",2},{"envLink",0},{"fdecay",.1f},{"fsustain",0}},{{"pwmSource",4},{"envLink",0},{"fdecay",.1f},{"fsustain",0}}},
+   {{{"vcaMode",0},{"envLink",0},{"fsustain",.1f}},{{"vcaMode",2},{"envLink",0},{"fsustain",.1f}}}};
+  int n=0;for(auto& pr:pairs){++n;std::initializer_list<std::pair<const char*,float>> dummy{};(void)dummy;
+   auto render=[&](const std::vector<std::pair<const char*,float>>& v){std::unique_ptr<juce::AudioProcessor> q(createPluginFilter());
+    for(auto& kv:v)for(auto* b:q->getParameters())if(auto* r=dynamic_cast<juce::RangedAudioParameter*>(b))if(r->paramID==kv.first)r->setValueNotifyingHost(r->convertTo0to1(kv.second));
+    q->setRateAndBufferSizeDetails(48000,256);q->prepareToPlay(48000,256);std::vector<float> out;
+    for(int k=0;k<120;++k){juce::AudioBuffer<float> b(2,256);b.clear();juce::MidiBuffer m;if(k==0)m.addEvent(juce::MidiMessage::noteOn(1,52,.9f),0);q->processBlock(b,m);for(int i=0;i<256;++i)out.push_back(b.getSample(0,i));}return out;};
+   if(diff(render(pr.first),render(pr.second))<.01){std::cerr<<"Added control "<<n<<" has no effect\n";return 80;}}}
+ std::cout<<"PASS key trig, LFO sync, envelope trig, tune, PWM and VCA sources\n";
+ // MIDI learn: an assignment kept with the session moves its parameter.
+ {std::unique_ptr<juce::AudioProcessor> q(createPluginFilter());juce::MemoryBlock saved;q->getStateInformation(saved);auto xml=juce::AudioProcessor::getXmlFromBinary(saved.getData(),int(saved.getSize()));
+  if(auto* old=xml->getChildByName("MidiMap"))xml->removeChildElement(old,true);
+  auto* map=xml->createNewChildElement("MidiMap");auto* entry=map->createNewChildElement("Map");entry->setAttribute("cc",21);entry->setAttribute("id","cutoff");
+  juce::MemoryBlock withMap;juce::AudioProcessor::copyXmlToBinary(*xml,withMap);q->setStateInformation(withMap.getData(),int(withMap.getSize()));
+  q->setRateAndBufferSizeDetails(48000,256);q->prepareToPlay(48000,256);juce::AudioBuffer<float> b(2,256);juce::MidiBuffer m;m.addEvent(juce::MidiMessage::controllerEvent(1,21,0),0);q->processBlock(b,m);
+  if(parameterOf(*q,"cutoff")->getValue()>.01f){std::cerr<<"MIDI learn assignment not applied\n";return 81;}
+  juce::MemoryBlock again;q->getStateInformation(again);if(!juce::AudioProcessor::getXmlFromBinary(again.getData(),int(again.getSize()))->getChildByName("MidiMap")->getChildByName("Map")){std::cerr<<"MIDI learn not saved with the session\n";return 82;}}
+ std::cout<<"PASS MIDI learn kept with the session\n";
  // UI-only regression: resizing/rendering must not alter a patch or drop its live controls.
  juce::MemoryBlock stateBefore; p->getStateInformation(stateBefore);
  for (int width : {1280, 1600, 2400}) {

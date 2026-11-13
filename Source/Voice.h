@@ -113,7 +113,7 @@ public:
  void setPan(float position){pan=jlimit(-1.f,1.f,position);} // -1 left, 0 centre, 1 right
  void envelopes(){const float stretch=vintage?(1.f+p("age")*envelopeError*timeOffset)*keyStretch:1.f;
   env.setParameters({p("attack")*stretch,p("decay")*stretch,p("sustain"),p("release")*stretch});filterEnv.setParameters({p("fattack")*stretch,p("fdecay")*stretch,p("fsustain"),p("frelease")*stretch});gate.setParameters({.002f,.002f,1.f,.006f});}
- void retarget(int note,float velocity,int wheel){follow(note);double current=pitch.getCurrentValue();hz=MidiMessage::getMidiNoteInHertz(note);pitch.reset(getSampleRate(),p("portamento"));pitch.setCurrentAndTargetValue(current);pitch.setTargetValue(std::log2(hz));serial=++previousPitch.starts;previousPitch.pitch=pitched?std::exp2(current):hz;vel=velocity;pitchWheelMoved(wheel);}
+ void retarget(int note,float velocity,int wheel){follow(note);held=true;double current=pitch.getCurrentValue();hz=MidiMessage::getMidiNoteInHertz(note);pitch.reset(getSampleRate(),p("portamento"));pitch.setCurrentAndTargetValue(current);pitch.setTargetValue(std::log2(hz));serial=++previousPitch.starts;previousPitch.pitch=pitched?std::exp2(current):hz;vel=velocity;pitchWheelMoved(wheel);}
  void startNote(int note,float velocity,SynthesiserSound*,int wheel) override {
   follow(note);punch=vintage?1.f:0.f;
   // The glide runs on the pitch (log2 of the frequency), so an octave takes the same time wherever it is on the keyboard.
@@ -123,9 +123,9 @@ public:
   const double origin=p("portamento")>.001f&&from>0?from:hz;pitch.setCurrentAndTargetValue(std::log2(origin));pitch.setTargetValue(std::log2(hz));serial=++previousPitch.starts;previousPitch.pitch=origin;pitched=true;
   // A note taken over while it still sounds: what it was putting out fades over a few milliseconds instead of stopping dead.
   tailL+=lastL;tailR+=lastR;lastL=lastR=0;fresh=true;vel=velocity;pitchWheelMoved(wheel);
-  a.reset();b.reset();highpass.reset();down.reset();bass=0;env.reset();filterEnv.reset();gate.reset();envelopes();env.noteOn();filterEnv.noteOn();gate.noteOn();lfoAge=0;pressure=0;lfoOffset=0;
+  a.reset();b.reset();highpass.reset();down.reset();bass=0;env.reset();filterEnv.reset();gate.reset();envelopes();env.noteOn();filterEnv.noteOn();gate.noteOn();lfoAge=0;pressure=0;lfoOffset=0;trigPhase=0;lfoLast=0;held=true;
  }
- void stopNote(float,bool tail) override {env.noteOff();filterEnv.noteOff();gate.noteOff();if(!tail){env.reset();filterEnv.reset();gate.reset();clearCurrentNote();}}
+ void stopNote(float,bool tail) override {held=false;env.noteOff();filterEnv.noteOff();gate.noteOff();if(!tail){env.reset();filterEnv.reset();gate.reset();clearCurrentNote();}}
  void pitchWheelMoved(int value) override {wheelValue=value;}
  void controllerMoved(int cc,int value) override {if(cc==1)wheel=float(value)/127.f;}
  // Pressure: channel aftertouch, or polyphonic aftertouch on this voice's key. It opens the filters (PRESS) and,
@@ -142,7 +142,10 @@ public:
   if(!isVoiceActive()){lastL=lastR=tailL=tailR=0;return;} // silent since the last block: nothing left to fade
   envelopes();const double sr=getSampleRate();
   // High-pass switch: 0 = bass boost, 1 = flat, 2 and 3 = two fixed high-pass settings.
-  const int hpfMode=int(p("hpf"));if(hpfMode>=2)highpass.setCutoffFrequency(hpfMode==2?hpfLowHz:hpfHighHz);
+  // HPF, one continuous fader: the bottom quarter boosts the bass (less and less towards the flat zone), a short flat
+  // zone, then a high-pass rising from 40 Hz to 1 kHz.
+  const float hpfPos=p("hpfFreq");const int hpfMode=hpfPos<.25f?0:(hpfPos<=.3f?1:2);const float boostGain=bassBoostGain*jlimit(0.f,1.f,(.25f-hpfPos)/.25f);
+  if(hpfMode==2)highpass.setCutoffFrequency(40.f*std::pow(25.f,(hpfPos-.3f)/.7f));
   const float bassRate=1.f-std::exp(-MathConstants<float>::twoPi*bassBoostHz/float(2.*sr)); // runs at twice the rate (see below)
   a.configure(int(p("filterAType")),int(p("slope")),p("resonance"));b.configure(int(p("filterBType")),int(p("slopeB")),p("resonanceB"));
   const int shape1=int(p("osc1Shape")),shape2=int(p("osc2Shape")),route=int(p("filterRoute"));
@@ -150,14 +153,15 @@ public:
   const bool linked=p("envLink")>.5f;
   // VCA mode GATE: the amplifier simply opens and closes with the key; the ADSR keeps running for a filter that follows it.
   // Filter A envelope can be inverted. PWM can come from the LFO, stay manual (WIDTH only), or follow the filter envelope.
-  const bool gated=p("vcaMode")>.5f;const float polarity=p("envInvert")>.5f?-1.f:1.f;const int pwmSource=int(p("pwmSource"));
+  // VCA source: 0 the amp envelope, 1 the gate, 2 the filter envelope.
+  const int vcaSource=int(p("vcaMode"));const bool gated=vcaSource==1;const float polarity=p("envInvert")>.5f?-1.f:1.f;const int pwmSource=int(p("pwmSource"));
   // The bender can also move both filter cutoffs, by up to the set number of octaves.
   // SYNC restarts oscillator II each time oscillator I completes a cycle; the pitch envelope then sweeps II only,
   // which is what gives the classic sync lead. X-MOD lets oscillator II bend the frequency of oscillator I.
   const bool sync=p("oscSync")>.5f;const double crossMod=p("crossMod")*1.5;
   const float bendCutoff=std::pow(2.f,float((wheelValue-8192)/8192.)*p("bendFilter"));
   const double ratio1=std::pow(2.,int(p("osc1Octave"))-2),ratio2=std::pow(2.,int(p("osc2Octave"))-2+p("osc2Tune")/12.+p("detune")/1200.);
-  const double bend=std::pow(2.,((wheelValue-8192)/8192.)*p("bendRange")/12.+unisonCents/1200.);
+  const double bend=std::pow(2.,((wheelValue-8192)/8192.)*p("bendRange")/12.+unisonCents/1200.+p("masterTune")/1200.); // TUNE: the whole instrument, in cents
   // LFO delay: after a new note the LFO stays out for the first part of the delay time, then fades in.
   // The mod wheel vibrato is not delayed.
   const float lfoDelay=p("lfoDelay")*float(sr),lfoHold=lfoDelay*.6f,lfoRamp=jmax(1.f,lfoDelay*.4f);
@@ -167,6 +171,10 @@ public:
   // Eight-voice instrument: each voice runs its own copy of the LFO at a slightly different speed (AGE), starting in
   // step with the others at each note and drifting apart, so a held chord moves instead of wobbling as one block.
   const bool ownLfo=vintage&&p("age")>0.f;const double lfoDrift=bus.step*double(p("age")*lfoRateError*lfoTune);
+  // KEY TRIG: this voice's LFO starts its cycle at each note. ENV TRIG: while the key is down, both envelopes start
+  // again at each LFO cycle (rhythmic, gated sounds). The mod wheel can also open both filters (WHL>FLT).
+  const bool keyTrig=p("lfoKeyTrig")>.5f,envTrig=p("envLfoTrig")>.5f;const double ownStep=bus.step+(ownLfo?lfoDrift:0.);
+  const float wheelOpen=std::exp2(p("wheelFilter")*3.f*wheel);
   const float age=vintage?p("age"):0.f,cutSpread=std::pow(2.f,age*cutoffError*cutOffset),driftRate=1.f-std::exp(-1.f/(driftSeconds*float(sr)));
   // PRE drive (eight-voice instrument): each voice is overloaded after its filters and ahead of its amplifier, on a
   // slightly lopsided curve that adds even harmonics too. Placed after the filters, it never takes anything away from
@@ -184,10 +192,13 @@ public:
   const float angle=(pan+1.f)*MathConstants<float>::pi*.25f,gainL=pan==0.f?1.f:1.41421356f*std::cos(angle),gainR=pan==0.f?1.f:1.41421356f*std::sin(angle);
   for(int i=0;i<count;++i){
    float e=env.getNextSample(),fe=filterEnv.getNextSample();if(linked)fe=e;
-   const float open=gate.getNextSample(),amp=gated?open:e;
+   const float open=gate.getNextSample(),amp=gated?open:(vcaSource==2?fe:e);
    pressureNow+=pressRate*(pressure-pressureNow);
-   float lfoNow=bus.lfo[size_t(start+i)];
-   if(ownLfo){lfoOffset+=lfoDrift;lfoOffset-=std::floor(lfoOffset);float t=bus.phase[size_t(start+i)]+float(lfoOffset);t-=std::floor(t);lfoNow=ModulationBus::wave(bus.shape,t);}
+   float lfoNow=bus.lfo[size_t(start+i)],t=bus.phase[size_t(start+i)];
+   if(keyTrig){trigPhase+=ownStep;trigPhase-=std::floor(trigPhase);t=float(trigPhase);lfoNow=ModulationBus::wave(bus.shape,t);}
+   else if(ownLfo){lfoOffset+=lfoDrift;lfoOffset-=std::floor(lfoOffset);t=bus.phase[size_t(start+i)]+float(lfoOffset);t-=std::floor(t);lfoNow=ModulationBus::wave(bus.shape,t);}
+   if(envTrig&&held&&t<lfoLast-.5f){env.noteOn();filterEnv.noteOn();} // the LFO has just started a new cycle
+   lfoLast=t;
    const float modulation=lfoNow*(lfoDelay<1.f?1.f:jlimit(0.f,1.f,(lfoAge-lfoHold)/lfoRamp));
    if(lfoAge<1.e7f)lfoAge+=1.f;
    cutNow+=follow5ms*(cutoff-cutNow);cutBNow+=follow5ms*(cutoffB-cutBNow);levelNow+=follow5ms*(level-levelNow);layerNow+=follow5ms*(layer-layerNow);subNow+=follow5ms*(subLevel-subNow);noiseNow+=follow5ms*(noise-noiseNow);
@@ -201,11 +212,11 @@ public:
     detune1=1.+age*(tuningError*tune1+driftCents*drift1)*.00057779;detune2=1.+age*(tuningError*tune2+driftCents*drift2)*.00057779;
    }
    const double dt=jlimit(.0000001,.45,base*ratio1*detune1),dt2=jlimit(.0000001,.45,base*ratio2*detune2*(sync?std::pow(2.,fe*envPitch/12.):1.));
-   const float pwmMove=pwmSource==0?.18f*pwmDepth*modulation:(pwmSource==2?.4f*pwmDepth*fe:0.f);
+   const float pwmMove=pwmSource==0?.18f*pwmDepth*modulation:pwmSource==2?.4f*pwmDepth*fe:pwmSource==3?-.4f*pwmDepth*fe:pwmSource==4?.4f*pwmDepth*e:pwmSource==5?-.4f*pwmDepth*e:0.f; // LFO, MAN, filter env +/-, amp env +/-
    float pwm=jlimit(.08f,.92f,width+pwmMove),pwm2=jlimit(.08f,.92f,(shape2==0?width:width2)+pwmMove);
    punch*=punchDecay; // a few milliseconds of extra brightness and level at the start of each note: the percussive front
-   float ca=jlimit(25.f,float(sr*.45),(1.f+punchCutoff*punch)*cutNow*cutSpread*tracking*velocityOpen*std::exp2(pressFilter*pressureNow)*bendCutoff*std::pow(2.f,fe*amount*polarity*6+modulation*filterDepth));
-   float cb=jlimit(25.f,float(sr*.45),cutBNow*cutSpread*tracking*velocityOpen*std::exp2(pressFilter*pressureNow)*bendCutoff*std::pow(2.f,fe*amountB*6+modulation*filterDepth));
+   float ca=jlimit(25.f,float(sr*.45),(1.f+punchCutoff*punch)*cutNow*cutSpread*tracking*velocityOpen*wheelOpen*std::exp2(pressFilter*pressureNow)*bendCutoff*std::pow(2.f,fe*amount*polarity*6+modulation*filterDepth));
+   float cb=jlimit(25.f,float(sr*.45),cutBNow*cutSpread*tracking*velocityOpen*wheelOpen*std::exp2(pressFilter*pressureNow)*bendCutoff*std::pow(2.f,fe*amountB*6+modulation*filterDepth));
    // Oscillators, mixer, filters and drive run at twice the sample rate and come back down through a half-band
    // filter: the overtones that sync, cross modulation and every saturation throw above the audio band are removed
    // instead of folding back down as metallic, out-of-tune noise.
@@ -215,7 +226,7 @@ public:
     const float second=oscillator(shape2,phase2,h2,pwm2,mix);lastOsc2=second;
     float sample=(levelNow*oscillator(shape1,phase,hx,pwm,mix)+layerNow*second)/(1+layerNow*.82f);
     sample=.7f*sample+.3f*subNow*wave(sub,h1*.5,.5f,1);sample+=noiseNow*.2828f*(random.nextFloat()*2-1); // noise level kept: half of it is filtered out on the way down
-    if(hpfMode>=2)sample=highpass.processSample(0,sample);else if(hpfMode==0){bass+=bassRate*(sample-bass);sample+=bassBoostGain*bass;}
+    if(hpfMode>=2)sample=highpass.processSample(0,sample);else if(hpfMode==0){bass+=bassRate*(sample-bass);sample+=boostGain*bass;}
     switch(route){case 1:sample=b.process(sample,cb);break;case 2:sample=b.process(a.process(sample,ca),cb);break;case 3:sample=a.process(b.process(sample,cb),ca);break;case 4:sample=(1-blend)*a.process(sample,ca)+blend*b.process(sample,cb);break;default:sample=a.process(sample,ca);}
     if(grit>0.f){sample+=driveMix*((std::tanh(push*sample+lean)-leanOffset)*pushScale-sample);dc+=dcRate*(sample-dc);sample-=dc;} // the lopsided curve leaves a small offset: removed here
     twice[k]=sample;
@@ -227,7 +238,7 @@ public:
    sample*=amp*(1-velocity+velocity*vel)*.18f*voiceGain*(1.f+punchLevel*punch);
    lastL=sample*gainL;lastR=sample*gainR;tailL*=tailDecay;tailR*=tailDecay;
    for(int ch=0;ch<out.getNumChannels();++ch)out.addSample(ch,start+i,ch==0?lastL+tailL:(ch==1?lastR+tailR:sample));
-   if(!(gated?gate.isActive():env.isActive())){clearCurrentNote();break;}
+   if(!(gated?gate.isActive():(vcaSource==2?filterEnv.isActive():env.isActive()))){clearCurrentNote();break;}
   }
  }
 private:
@@ -239,9 +250,9 @@ private:
  float keyStretch=1,punch=0,dc=0;
  // Vintage envelopes and attack, to adjust by ear: time ratio per octave, length of the punch, its share of cutoff and of level.
  static constexpr float keyFollow=.85f,punchSeconds=.006f,punchCutoff=.4f,punchLevel=.25f;
- float pressure=0,pressureNow=0,lfoTune=0;double lfoOffset=0;
+ float pressure=0,pressureNow=0,lfoTune=0,lfoLast=0;double lfoOffset=0,trigPhase=0;bool held=false;
  static constexpr float lfoRateError=.12f; // LFO speed spread between voices at AGE = 10
  static constexpr float tuningError=6.f,driftCents=4.f,cutoffError=.12f,envelopeError=.15f,driftSeconds=.6f;
  // Tuning values for the high-pass switch: starting points to adjust by ear, not hardware measurements.
- static constexpr float hpfLowHz=225.f,hpfHighHz=700.f,bassBoostHz=90.f,bassBoostGain=1.2f;int wheelValue=8192;
+ static constexpr float bassBoostHz=90.f,bassBoostGain=1.2f;int wheelValue=8192;
 };

@@ -273,12 +273,12 @@ private:
 class SlideSwitch : public Component {
 public:
  SlideSwitch(RangedAudioParameter& parameter, const StringArray& names)
-  : attachment(parameter, [this](float value) { slider.setValue(1.0 - double(roundToInt(value)), dontSendNotification); }, nullptr) {
-  slider.setSliderStyle(Slider::LinearVertical); slider.setTextBoxStyle(Slider::NoTextBox, false, 0, 0); slider.setRange(0.0, 1.0, 1.0);
-  slider.getProperties().set("marks", 1); slider.setWantsKeyboardFocus(false); slider.setName(parameter.getName(60));
-  slider.onValueChange = [this] { attachment.setValueAsCompleteGesture(float(1 - roundToInt(slider.getValue()))); };
+  : last(jmax(1, names.size() - 1)), attachment(parameter, [this](float value) { slider.setValue(double(last - roundToInt(value)), dontSendNotification); }, nullptr) {
+  slider.setSliderStyle(Slider::LinearVertical); slider.setTextBoxStyle(Slider::NoTextBox, false, 0, 0); slider.setRange(0.0, double(last), 1.0);
+  slider.getProperties().set("marks", last); slider.setWantsKeyboardFocus(false); slider.setName(parameter.getName(60));
+  slider.onValueChange = [this] { attachment.setValueAsCompleteGesture(float(last - roundToInt(slider.getValue()))); };
   addAndMakeVisible(slider);
-  for (int i = 0; i < 2; ++i) {
+  for (int i = 0; i <= last; ++i) {
    auto* text = legends.add(new Label({}, names[i]));
    text->setFont(orbitui::face(15.f)); text->setColour(Label::textColourId, orbitui::ink);
    text->setJustificationType(Justification::centredLeft); text->setInterceptsMouseClicks(false, false); text->setBorderSize({});
@@ -289,12 +289,12 @@ public:
  void resized() override { // the cap travels from 12 px below the top to 12 px above the bottom of the slider
   slider.setBounds(getWidth() / 2 - 38, 0, 28, getHeight());
   const int x = slider.getRight() + 8, width = getWidth() - x;
-  legends[0]->setBounds(x, 4, width, 16); legends[1]->setBounds(x, getHeight() - 20, width, 16);
+  for (int i = 0; i <= last; ++i) legends[i]->setBounds(x, 4 + (getHeight() - 24) * i / last, width, 16); // one name level with each stop
  }
- void mouseDown(const MouseEvent& event) override { if (event.x > slider.getRight()) attachment.setValueAsCompleteGesture(event.y < getHeight() / 2 ? 0.f : 1.f); }
+ void mouseDown(const MouseEvent& event) override { if (event.x > slider.getRight()) attachment.setValueAsCompleteGesture(float(jlimit(0, last, roundToInt(float(event.y - 12) * float(last) / float(getHeight() - 24))))); }
  void hideLegends() { for (auto* text : legends) text->setVisible(false); } // printed on the rendered panel instead
 private:
- Slider slider; OwnedArray<Label> legends; ParameterAttachment attachment;
+ int last; Slider slider; OwnedArray<Label> legends; ParameterAttachment attachment;
 };
 
 // Stepped rotary selector with a waveform symbol (or a short text) at each position, bound to a choice parameter.
@@ -471,7 +471,7 @@ private:
   control.slider.onValueChange = update; update();
  }
  void addChoice(const char* id, const char* text, const StringArray& names, int page, Rectangle<int> cell, bool vertical, Colour colour = orbitui::neutral) {
-  if (vertical && names.size() == 2) { // a choice between two: a slide switch under its caption
+  if (vertical && names.size() <= 3) { // a choice between two or three: a slide switch under its caption
    caption(text, cell.withHeight(16), page);
    place(*switches.add(new SlideSwitch(*orbit.state.getParameter(id), names)), {cell.getX(), cell.getY() + 22, cell.getWidth(), 52}, page);
    return;
@@ -519,6 +519,7 @@ private:
   for (int i = 0; i < 3; ++i) { auto* button = bankButtons.add(new TextButton()); addButton(*button, String::charToString(juce_wchar('A' + i)), {876 + i * 41, 24, 36, 38}, neutral, 1); button->onClick = [this, i] { shownBank = i; timerCallback(); }; }
   for (int i = 0; i < 8; ++i) { auto* button = patchButtons.add(new TextButton()); addButton(*button, String(i + 1), {1024 + i * 39, 24, 34, 38}, i < 4 ? bright : neutral, 1); button->onClick = [this, i] { orbit.setCurrentProgram(shownBank * 8 + i); timerCallback(); }; }
   addButton(saveButton, "SAVE", {1416, 30, 70, 32}, amber, 0); saveButton.onClick = [this] { saveDialog(); };
+  addButton(midiButton, "MIDI", {1344, 18, 60, 44}, neutral, 1); midiButton.onClick = [this] { midiMenu(); }; // MIDI learn
   addButton(loadButton, "LOAD", {1494, 30, 70, 32}, neutral, 0);
   loadButton.onClick = [this] { refreshPresetMenu(); if (orbit.userPresetName().isNotEmpty()) showResult(orbit.loadUserPreset(orbit.userPresetName())); else orbit.setCurrentProgram(orbit.getCurrentProgram()); };
  }
@@ -541,7 +542,7 @@ private:
   addFader("oscLayer", "LEVEL", 0, cells[1]); addFader("osc2Width", "WIDTH", 0, cells[2]);
   addRowKnob("osc2Tune", "TUNE", cells[4].withTrimmedTop(32)); addRowKnob("detune", "FINE", cells[5].withTrimmedTop(32));
   cells = split(next("FILTER A", teal, 9.6f), {.3f, .8f, 1, 1, 1, 1, .9f, .9f, .5f, 2.2f});
-  addFader("hpf", "HPF", 0, cells[1]).slider.getProperties().set("marks", 3);
+  addFader("hpfFreq", "HPF", 0, cells[1]); // bass boost at the bottom, then flat, then a rising high-pass
   addFader("cutoff", "FREQ", 0, cells[2]); addFader("resonance", "RES", 0, cells[3]); addFader("env", "ENV", 0, cells[4]); addFader("lfoFilter", "LFO", 0, cells[5]); addFader("keytrack", "KYBD", 0, cells[6]); addFader("velFilter", "VEL", 0, cells[7]); // velocity opens both filters
   addChoice("slope", "SLOPE", {"12 dB", "24 dB"}, 0, cells[9], true);
   addChoice("filterAType", "MODEL", {"LADDER", "SVF"}, 0, cells[9].withTrimmedTop(100), true);
@@ -585,10 +586,14 @@ private:
   addRowKnob("rate", "RATE", top[0]); addRowKnob("lfoDelay", "DELAY", top[1]);
   addWaveKnob("lfoShape", "WAVE", {"TRI", "SINE", "SAW", "SQUARE"}, 0, top[2]);
   addRowKnob("lfoPitch", "PITCH", top[3]);
-  auto bottom = split(mod.withTrimmedTop(110), {float(modW - 2 * plain), float(plain), float(plain)});
-  caption("PWM SOURCE", bottom[0].withHeight(16), 0);
-  addChoice("pwmSource", "", {"LFO", "MAN", "ENV"}, 0, bottom[0].withTrimmedTop(34), false);
-  addRowKnob("envPitch", "ENV>PITCH", bottom[1]); addRowKnob("wheelDepth", "WHEEL", bottom[2]);
+  // Under the LFO knobs: the tempo sync window, KEY TRIG and ENV TRIG.
+  const auto under = [](Rectangle<int> cell) { return Rectangle<int>(cell.getX() + 4, cell.getY() + 92, cell.getWidth() - 8, 21); };
+  place(*menuButtons.add(new ChoiceMenuButton(*orbit.state.getParameter("lfoSync"))), under(top[0]), 0);
+  addToggle("lfoKeyTrig", "KEY TRIG", 0, under(top[1]), 2, neutral);
+  addToggle("envLfoTrig", "ENV TRIG", 0, under(top[2]), 2, neutral);
+  auto bottom = split(mod.withTrimmedTop(118), {float(selector), float(plain), float(plain), float(plain)});
+  addWaveKnob("pwmSource", "PWM", {"LFO", "MAN", "F+", "F-", "A+", "A-"}, 0, bottom[0]); // filter or amp envelope, either way up
+  addRowKnob("envPitch", "ENV>PITCH", bottom[1]); addRowKnob("wheelDepth", "WHEEL", bottom[2]); addRowKnob("wheelFilter", "WHL>FLT", bottom[3]);
 
   const auto filter = section("FILTER B", teal, filterW);
   auto cells = split(filter.withHeight(120), {float(filterW - 2 * plain), float(plain), float(plain)});
@@ -607,22 +612,28 @@ private:
   addRowKnob("atFilter", "PRESS", cells[2]); // key pressure opens both filters, as the bender does with BEND
 
   // The chorus sits on the main panel, last block of the row, with orange caps of its own.
-  const auto chorus = section("CHORUS", amber, chorusW);
+  // CHORUS above DRIVE, stacked in the last column of the row like FILTER B and ROUTING.
+  const Rectangle<int> chorusBox(x, row2Y, chorusW, 126), driveBox(x, row2Y + 128, chorusW, 122);
+  sections.push_back({"CHORUS", amber, chorusBox, 0}); sectionColour = amber;
+  const auto chorus = chorusBox.withTrimmedTop(30);
   auto* chorusModes = choices.add(new ChoiceButtons(*orbit.state.getParameter("chorusMode"), {"OFF", "I", "II", "I+II"}, false, amber));
   chorusModes->useColouredCaps(amber);
-  place(*chorusModes, chorus.withHeight(120).withTrimmedTop(22).withHeight(48).reduced(3, 0), 0);
-  cells = split(chorus.withTrimmedTop(110), {float(plain), float(chorusW - plain)});
-  addRowKnob("chorus", "MIX", cells[0]);
+  place(*chorusModes, Rectangle<int>(chorus.getX() + 2, chorus.getY() + 22, chorusW - plain - 4, 48), 0); // the four keys, MIX beside them
+  addRowKnob("chorus", "MIX", chorus.withTrimmedLeft(chorusW - plain));
+  sections.push_back({"DRIVE", amber, driveBox, 0}); sectionColour = amber;
+  // PRE: inside each voice, after its filters (eight-voice instrument); POST: the whole instrument, ahead of the delay.
+  cells = split(driveBox.withTrimmedTop(30), {1, 1});
+  addRowKnob("voiceDrive", "PRE", cells[0]); addRowKnob("fxDrive", "POST", cells[1]);
  }
 
  // ---- lower row: voices, glide, arpeggio, effects, output (always visible) ----------------
  void buildLowerRow() {
   using namespace orbitui;
-  Row row(*this, lowerY, lowerH, -1, 28.5f, 7);
+  Row row(*this, lowerY, lowerH, -1, 27.2f, 6);
   auto voices = row.next("VOICES", amber, 4.9f);
   auto cells = split(voices.withHeight(74), {1, 1, .8f, .8f}); // two switches and the eight-voice character above, the assign keys and HOLD below
   addChoice("mode", "COUNT", {"6", "8"}, -1, cells[0], true);
-  addChoice("vcaMode", "VCA", {"ENV", "GATE"}, -1, cells[1], true);
+  addChoice("vcaMode", "VCA", {"ENV", "GATE", "F.ENV"}, -1, cells[1], true);
   addKnob("age", "AGE", cells[2]); addKnob("voiceWidth", "WIDTH", cells[3]); // act on the eight-voice instrument only
   cells = split(voices.withTrimmedTop(80).withHeight(46), {3, 1.25f});
   place(*choices.add(new ChoiceButtons(*orbit.state.getParameter("voiceMode"), {"POLY", "MONO", "UNI"}, false, neutral)), cells[0].reduced(2, 0), -1);
@@ -640,8 +651,6 @@ private:
   addChoice("arpDivision", "STEP", {"1/4", "1/8", "1/16"}, -1, cells[0], false);
   addChoice("arpOctaves", "OCT", {"1", "2", "3"}, -1, cells[1], false);
   addKnob("arpTempo", "TEMPO", cells[2]); addKnob("arpGate", "GATE", cells[3]);
-  cells = split(row.next("DRIVE", amber, 2.4f), {1, 1}); // PRE: inside each voice, ahead of the filter (eight-voice instrument); POST: the whole output
-  addKnob("voiceDrive", "PRE", cells[0]); addKnob("fxDrive", "POST", cells[1]);
   cells = split(row.next("DELAY", teal, 4.6f), {1, 1, 1, 1});
   // TIME shares its column with the sync selector: FREE uses the knob, a note value follows the tempo.
   caption("TIME", cells[0].withHeight(14), -1, 12.f);
@@ -661,7 +670,8 @@ private:
   addToggle("reverbOn", "ON", -1, {cells[3].getX() + 2, cells[3].getY() + 80, cells[3].getWidth() - 4, 44}, 1, neutral);
   place(*choices.add(new ChoiceButtons(*orbit.state.getParameter("reverbType"), {"VINT", "PLATE", "SPACE"}, false, neutral)), {reverbArea.getX() + 2, reverbArea.getY() + 80, reverbArea.getWidth() - 4, 44}, -1);
   addKnob("reverbDamp", "DAMP", cells[1], true); addKnob("reverbColor", "COLOR", cells[2], true); addKnob("reverbMix", "LEVEL", cells[3], true);
-  addKnob("gain", "VOLUME", row.next("OUTPUT", neutral, 1.3f));
+  cells = split(row.next("OUTPUT", neutral, 2.4f), {1, 1});
+  addKnob("gain", "VOLUME", cells[0]); addKnob("masterTune", "TUNE", cells[1]); // TUNE: the whole instrument, +/- 50 cents
  }
 
  void buildKeyboard() {
@@ -810,6 +820,23 @@ private:
   userNames = orbit.userPresetNames();
   if (!userNames.isEmpty()) { presets.addSeparator(); presets.addSectionHeading("USER"); for (int i = 0; i < userNames.size(); ++i) presets.addItem("USER / " + userNames[i], 1000 + i); }
  }
+ void midiMenu() {
+  using orbitui::utf8;
+  PopupMenu menu; const int touched = orbit.lastTouchedParameter();
+  const auto nameOf = [this](int index) { return orbit.getParameters()[index]->getName(30); };
+  if (orbit.isLearning()) menu.addItem(1, utf8("Annuler l'apprentissage"));
+  else menu.addItem(1, utf8("Apprendre : touche un réglage, puis tourne un bouton de ton contrôleur"));
+  menu.addItem(2, touched >= 0 && orbit.ccFor(touched) >= 0 ? utf8("Oublier le CC de « ") + nameOf(touched) + utf8(" »") : utf8("Oublier le CC du dernier réglage touché"), touched >= 0 && orbit.ccFor(touched) >= 0);
+  menu.addItem(3, utf8("Tout oublier"));
+  bool any = false;
+  for (int index = 0; index < orbit.getParameters().size(); ++index) if (const int cc = orbit.ccFor(index); cc >= 0) { if (!any) menu.addSeparator(); any = true; menu.addItem(100 + index, "CC " + String(cc) + utf8("  →  ") + nameOf(index), false); }
+  menu.showMenuAsync(PopupMenu::Options().withTargetComponent(&midiButton), [safe = Component::SafePointer<Editor>(this), touched](int result) {
+   if (safe == nullptr) return;
+   if (result == 1) { if (safe->orbit.isLearning()) safe->orbit.stopLearning(); else safe->orbit.startLearning(); }
+   if (result == 2 && touched >= 0) safe->orbit.forget(touched);
+   if (result == 3) safe->orbit.forgetAll();
+   safe->timerCallback(); });
+ }
  void showResult(const Result& result) { if (result.failed()) AlertWindow::showMessageBoxAsync(MessageBoxIconType::WarningIcon, "Preset", result.getErrorMessage()); }
  void saveDialog() {
   using orbitui::utf8;
@@ -839,7 +866,11 @@ private:
   else presets.setText("USER / " + userName, dontSendNotification);
   const bool eight = orbit.state.getRawParameterValue("mode")->load() > .5f;
   const String line = (user ? String("USER") : "BANK " + String::charToString(juce_wchar('A' + program / 8)) + " / " + String(program % 8 + 1)) + (eight ? "    8 VOICES" : "    6 VOICES") + (orbit.isPatchModified() ? "    EDITED" : "");
-  if (line != displayLine) { displayLine = line; surface.repaint(564, 10, 290, 24); }
+  midiButton.setToggleState(orbit.isLearning(), dontSendNotification);
+  String shown = line;
+  if (orbit.isLearning()) { const int touched = orbit.lastTouchedParameter();
+   shown = touched < 0 ? String("MIDI LEARN    TOUCH A CONTROL") : "MIDI LEARN    " + orbit.getParameters()[touched]->getName(14).toUpperCase() + "  <  MOVE A CC"; }
+  if (shown != displayLine) { displayLine = shown; surface.repaint(564, 10, 290, 24); }
   // Standalone only: keep the typing keys on the piano keyboard. Inside a DAW the host keeps its own shortcuts.
   if (orbit.wrapperType == AudioProcessor::wrapperType_Standalone && isShowing() && Component::getCurrentlyFocusedComponent() == nullptr && Component::getCurrentlyModalComponent() == nullptr) keyboard.grabKeyboardFocus();
   if (delayTimeKnob != nullptr) delayTimeKnob->setAlpha(orbit.state.getRawParameterValue("delaySync")->load() > .5f ? .35f : 1.f); // the knob is idle while synced
@@ -857,7 +888,7 @@ private:
  std::vector<Section> sections; std::vector<std::pair<Component*, int>> paged;
  OwnedArray<Label> labels; OwnedArray<Fader> faders; OwnedArray<Toggle> toggles; OwnedArray<ChoiceButtons> choices; OwnedArray<WaveKnob> waveKnobs; OwnedArray<SlideSwitch> switches; OwnedArray<ChoiceMenuButton> menuButtons; Slider* delayTimeKnob = nullptr;
  OwnedArray<TextButton> bankButtons, patchButtons;
- ComboBox presets; TextButton saveButton, loadButton, octDown, octUp;
+ ComboBox presets; TextButton saveButton, loadButton, octDown, octUp, midiButton;
  StringArray userNames; String displayLine; Colour sectionColour{orbitui::neutral};
  int page = 0, octave = 2, shownBank = 0, lastProgram = -1;
 };
