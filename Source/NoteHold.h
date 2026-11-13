@@ -27,7 +27,7 @@ public:
     if (down[key]) { down[key] = false; --pressed; }
     if (on) { held[key] = true; anyHeld = true; } else output.addEvent(message, at);
    } else {
-    if (message.isAllNotesOff() || message.isAllSoundOff()) reset(), wasOn = on;
+    if (message.isAllNotesOff() || message.isAllSoundOff()) resetChannel(message.getChannel());
     output.addEvent(message, at);
    }
   }
@@ -35,6 +35,15 @@ public:
  }
 private:
  static size_t index(const juce::MidiMessage& message) { return size_t((message.getChannel() - 1) * 128 + message.getNoteNumber()); }
+ void resetChannel(int channel) {
+  const size_t first = size_t((channel - 1) * 128);
+  for (size_t key = first; key < first + 128; ++key) {
+   if (down[key]) --pressed;
+   down[key] = held[key] = false;
+  }
+  anyHeld = false;
+  for (bool note : held) anyHeld = anyHeld || note;
+ }
  void releaseHeld(int at) {
   if (!anyHeld) return;
   for (size_t key = 0; key < held.size(); ++key) if (held[key]) { held[key] = false; if (!down[key]) output.addEvent(juce::MidiMessage::noteOff(int(key / 128) + 1, int(key % 128)), at); }

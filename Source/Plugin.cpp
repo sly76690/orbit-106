@@ -6,6 +6,7 @@
 using namespace juce;
 #include "Arpeggiator.h"
 #include "PresetStorage.h"
+#include "CinematicBank.h"
 #include "EnsembleChorus.h"
 #include "Reverbs.h"
 #include "CharacterDelay.h"
@@ -22,11 +23,11 @@ class Orbit : public AudioProcessor, private AudioProcessorValueTreeState::Liste
 public:
  AudioProcessorValueTreeState state;
  MidiKeyboardState keyboard;
- Orbit() : AudioProcessor(BusesProperties().withOutput("Stereo",AudioChannelSet::stereo(),true)), state(*this,nullptr,"OrbitState",parameters()), synth(state,true), classic(state) {
-  for(int i=0;i<8;++i){auto* voice=new Voice(state,previousJupiter,modulation);voice->setNoiseSeed(1001+i);voice->setVintage(i);synth.addVoice(voice);} synth.addSound(new Sound()); synth.setNoteStealingEnabled(true);
-  for(int i=0;i<6;++i){auto* voice=new Voice(state,previousClassic,modulation);voice->setNoiseSeed(2001+i);classic.addVoice(voice);} classic.addSound(new Sound());classic.setNoteStealingEnabled(true);
+ Orbit() : AudioProcessor(BusesProperties().withOutput("Stereo",AudioChannelSet::stereo(),true)), state(*this,nullptr,"OrbitState",parameters()), voices8(state,true), voices6(state,true) {
+  for(int i=0;i<8;++i){auto* voice=new Voice(state,previousEight,modulation);voice->setVoiceIndex(i);voice->setVintage(true);voices8.addVoice(voice);} voices8.addSound(new Sound()); voices8.setNoteStealingEnabled(true);
+  for(int i=0;i<6;++i){auto* voice=new Voice(state,previousSix,modulation);voice->setVoiceIndex(i);voices6.addVoice(voice);} voices6.addSound(new Sound());voices6.setNoteStealingEnabled(true);
   for(auto* param:getParameters()) if(auto* identified=dynamic_cast<AudioProcessorParameterWithID*>(param)) state.addParameterListener(identified->paramID,this);
-  state.state.setProperty("stateVersion",4,nullptr);
+  state.state.setProperty("stateVersion",5,nullptr);
   for(auto& slot:ccTarget)slot.store(-1);addListener(this);
  }
  ~Orbit() override {removeListener(this);for(auto* param:getParameters()) if(auto* identified=dynamic_cast<AudioProcessorParameterWithID*>(param)) state.removeParameterListener(identified->paramID,this);}
@@ -37,8 +38,8 @@ public:
  // Sounds: complete presets shipped by the installer (shared library), plus any the user drops in their own Presets/Sounds.
  static File sharedRoot(){return File::getSpecialLocation(File::commonApplicationDataDirectory).getChildFile("Application Support").getChildFile("SF Instruments").getChildFile("Orbit 106");}
  String soundName() const {return state.state.getProperty("soundName").toString();}
- StringArray soundNames() const {auto names=PresetStorage(sharedRoot(),"Sounds").names();names.mergeArray(PresetStorage(presetRoot(),"Sounds").names());names.sort(true);return names;}
- Result loadSound(const String& name){auto xml=PresetStorage(presetRoot(),"Sounds").load(name);if(!xml)xml=PresetStorage(sharedRoot(),"Sounds").load(name);if(!xml)return Result::fail("Son absent ou invalide dans Presets/Sounds.");
+ StringArray soundNames() const {auto names=PresetStorage(sharedRoot(),"Sounds").names();names.mergeArray(PresetStorage(presetRoot(),"Sounds").names());names.mergeArray(CinematicBank::names());names.sort(true);return names;}
+ Result loadSound(const String& name){auto xml=CinematicBank::load(name);if(!xml)xml=PresetStorage(presetRoot(),"Sounds").load(name);if(!xml)xml=PresetStorage(sharedRoot(),"Sounds").load(name);if(!xml)return Result::fail("Son absent ou invalide dans Presets/Sounds.");
   MemoryBlock data;copyXmlToBinary(*xml,data);setStateInformation(data.getData(),int(data.getSize()));state.state.removeProperty("userPresetName",nullptr);state.state.setProperty("soundName",name,nullptr);modified.store(false);return Result::ok();}
  bool userPresetExists(const String& name) const {return PresetStorage(presetRoot()).exists(name);}
  Result saveUserPreset(const String& name,bool replace=false){auto saved=state.copyState();saved.setProperty("program",currentProgram.load(),nullptr);saved.setProperty("modified",false,nullptr);saved.setProperty("userPresetName",name,nullptr);saved.removeProperty("soundName",nullptr);auto xml=saved.createXml();auto result=PresetStorage(presetRoot()).save(name,*xml,replace);if(result.wasOk()){state.state.setProperty("userPresetName",name,nullptr);state.state.removeProperty("soundName",nullptr);modified.store(false);}return result;}
@@ -46,8 +47,8 @@ public:
  bool isPatchModified() const {return modified.load();}
   // Host pages of eight, in the order of the front panel.
   static constexpr const char* hostPages[]={
-   "wave","width","pwm","sub","noise","osc1Shape","osc1Octave","osc1Level",                      // OSC I
-   "oscLayer","osc2Width","osc2Tune","detune","osc2Shape","osc2Octave","oscSync","crossMod",       // OSC II
+   "wave","width","pwm","sub","noise","osc1Level","jupiterMix","oscLayer",                     // JUNO, SOURCE MIX
+   "osc1Shape","osc1Octave","vco1Width","crossMod","osc2Shape","osc2Octave","osc2Width","detune", // JUPITER VCOs
    "cutoff","resonance","env","keytrack","lfoFilter","hpfFreq","slope","filterAType",             // FILTER A
    "attack","decay","sustain","release","velocity","vcaMode","portamento","legato",              // AMP
    "fattack","fdecay","fsustain","frelease","envLink","envInvert","envPitch","pwmSource",         // FILTER ENVELOPE
@@ -57,12 +58,13 @@ public:
    "mode","voiceMode","age","voiceWidth","hold","chorusMode","chorus","fxDrive",                  // VOICES, CHORUS
    "arpOn","arpSync","arpPattern","arpDivision","arpOctaves","arpTempo","arpGate","delayOn",      // ARPEGGIO
    "delayTime","delaySync","delayFeedback","delayMod","delayMix","reverbOn","reverbType","reverbSize", // DELAY, REVERB
-   "reverbDamp","reverbColor","reverbMix","lfoManual","lfoTrig","atVolume","atLfo","atDrive"};                                        // REVERB, EXPRESSION
+   "reverbDamp","reverbColor","reverbMix","lfoManual","lfoTrig","atVolume","atLfo","atDrive",
+   "osc2Tune","oscSync","vco2Low","vcoPwm"};                                        // REVERB, EXPRESSION
   // Short names for the host and controller displays (Push shows about a dozen characters).
   static String label(const String& id,const String& longName){
    static const std::map<String,String> names{
-    {"wave","Osc1 SawPls"},{"width","Osc1 Width"},{"pwm","Osc1 PWM"},{"sub","Sub Level"},{"noise","Noise"},{"osc1Shape","Osc1 Wave"},{"osc1Octave","Osc1 Octave"},{"osc1Level","Osc1 Level"},
-    {"oscLayer","Osc2 Level"},{"osc2Width","Osc2 Width"},{"osc2Tune","Osc2 Tune"},{"detune","Osc2 Fine"},{"osc2Shape","Osc2 Wave"},{"osc2Octave","Osc2 Octave"},{"oscSync","Osc2 Sync"},{"crossMod","X-Mod"},
+    {"jupiterMix","Juno/Jupiter"},{"vcoPwm","VCO PWM"},{"vco1Width","VCO1 Width"},{"vco2Low","VCO2 Low"},{"wave","DCO SawPls"},{"width","DCO Width"},{"pwm","DCO PWM"},{"sub","Sub Level"},{"noise","Noise"},{"osc1Shape","VCO1 Wave"},{"osc1Octave","VCO1 Range"},{"osc1Level","DCO Level"},
+    {"oscLayer","Source Mix"},{"osc2Width","VCO2 Width"},{"osc2Tune","VCO2 Tune"},{"detune","VCO2 Fine"},{"osc2Shape","VCO2 Wave"},{"osc2Octave","VCO2 Range"},{"oscSync","VCO2 Sync"},{"crossMod","X-Mod"},
     {"cutoff","A Freq"},{"resonance","A Reso"},{"env","A Env"},{"keytrack","Filter Kybd"},{"lfoFilter","Filter LFO"},{"hpfFreq","HPF"},{"slope","A Slope"},{"filterAType","A Model"},
     {"attack","Amp Attack"},{"decay","Amp Decay"},{"sustain","Amp Sustain"},{"release","Amp Release"},{"velocity","Velocity"},{"vcaMode","VCA Mode"},{"portamento","Portamento"},{"legato","Legato"},
     {"fattack","Flt Attack"},{"fdecay","Flt Decay"},{"fsustain","Flt Sustain"},{"frelease","Flt Release"},{"envLink","Flt Env Src"},{"envInvert","A Env Pol"},{"envPitch","Env>Pitch"},{"pwmSource","PWM Source"},
@@ -76,8 +78,8 @@ public:
   }
  static AudioProcessorValueTreeState::ParameterLayout parameters() {
    // Parameters are made in any order, then handed to the host page by page (see hostPages): a controller that shows
-   // eight at a time, such as Push, walks through the instrument section by section. Ids never change, so presets,
-   // sessions and automation are unaffected; only the order and the short names the host shows are set here.
+   // eight at a time, such as Push, walks through the instrument section by section.
+   // Version 5 deliberately changes the oscillator architecture; old sound identity is not preserved.
    std::vector<std::unique_ptr<RangedAudioParameter>> made;
    auto keep=[&made](auto parameter){made.push_back(std::move(parameter));};
   keep(std::make_unique<AudioParameterChoice>(ParameterID{"mode",1},label("mode","Voices"),StringArray{"6 voices","8 voices"},0));
@@ -102,7 +104,7 @@ public:
    auto parse=[range,centred](const String& typed){return range.convertFrom0to1(jlimit(0.f,1.f,(typed.getFloatValue()+(centred?5.f:0.f))/10.f));};
    keep(std::make_unique<AudioParameterFloat>(ParameterID{id,1},label(id,name),range,def,AudioParameterFloatAttributes().withStringFromValueFunction(text).withValueFromStringFunction(parse)));
   };
-  add("wave","Saw / Pulse",0,1,0.35f);add("width","Pulse width",0.08f,0.92f,0.5f);add("sub","Sub level",0,1,0.7f);add("detune","Detune (cents)",0,30,8);
+  add("wave","Saw / Pulse",0,1,0.35f);add("width","Pulse width",0.08f,0.92f,0.5f);add("sub","Sub level",0,1,0.7f);add("detune","VCO 2 fine (cents)",-50,50,0);
   add("cutoff","Cutoff (Hz)",25,18000,1800,0.3f);add("resonance","Resonance",0,0.95f,0.2f);add("env","Filter envelope",0,1,0.35f);
   add("attack","Attack (s)",0.001f,5,0.02f,0.33f);add("decay","Decay (s)",0.002f,12,0.6f,0.32f);add("sustain","Sustain",0,1,0.7f);add("release","Release (s)",0.002f,12,0.8f,0.32f); // Juno-60 spec sheet: decay and release to 12 s
   add("rate","LFO (Hz)",0.05f,20,0.6f,0.33f);add("pwm","PWM depth",0,1,0.3f);add("chorus","Chorus",0,1,0.35f);add("gain","Output",0,1,0.7f);
@@ -119,14 +121,16 @@ public:
   keep(std::make_unique<AudioParameterChoice>(ParameterID{"arpOctaves",1},label("arpOctaves","Arp octaves"),StringArray{"1 OCT","2 OCT","3 OCT"},0));
   add("fxDrive","Drive",0,1,0);add("delayTime","Delay time (s)",0.03f,1.5f,0.3f);add("delayFeedback","Delay feedback",0,1.1f,0.3f);add("delayMod","Delay modulation",0,1,0.3f);add("delayMix","Delay mix",0,0.65f,0);
   add("reverbSize","Reverb size",0,1,0.5f);add("reverbDamp","Reverb damping",0,1,0.5f);add("reverbMix","Reverb mix",0,0.65f,0);add("reverbColor","Reverb color",0,1,0.4f);
-  add("oscLayer","Oscillator II layer",0,1,0);
+  add("oscLayer","Jupiter source mix",0,1,.5f);
+  add("jupiterMix","Juno / Jupiter mix",0,1,0);add("vco1Width","VCO 1 pulse width",.08f,.92f,.5f);add("vcoPwm","VCO PWM depth",0,1,0);
+  keep(std::make_unique<AudioParameterBool>(ParameterID{"vco2Low",1},label("vco2Low","VCO 2 low frequency"),false));
   keep(std::make_unique<AudioParameterBool>(ParameterID{"envLink",1},label("envLink","Link filter to amp envelope"),true));
   auto choice=[&](const char* id,const char* name,StringArray values,int initial=0){keep(std::make_unique<AudioParameterChoice>(ParameterID{id,1},label(id,name),values,initial));};
-  choice("osc1Shape","Oscillator I shape",{"Legacy mix","Saw","Pulse","Triangle","Sine"});
-  choice("osc2Shape","Oscillator II shape",{"Legacy mix","Saw","Pulse","Triangle","Sine"});
+  choice("osc1Shape","VCO 1 shape",{"Saw","Pulse","Triangle","Sine","Square","Noise"});
+  choice("osc2Shape","VCO 2 shape",{"Saw","Pulse","Triangle","Sine","Square","Noise"});
   add("osc1Level","Oscillator I level",0,1,1);add("osc2Width","Oscillator II pulse width",.08f,.92f,.5f);
-  choice("osc1Octave","Oscillator I octave",{"-2","-1","0","+1","+2"},2);
-  choice("osc2Octave","Oscillator II octave",{"-2","-1","0","+1","+2"},2);
+  choice("osc1Octave","VCO 1 range",{"64'","32'","16'","8'","4'","2'"},3);
+  choice("osc2Octave","VCO 2 range",{"64'","32'","16'","8'","4'","2'"},3);
   add("osc2Tune","Oscillator II semitones",-12,12,0);
   choice("lfoShape","LFO waveform",{"Triangle","Sine","Saw","Square"});
   add("lfoDelay","LFO delay (s)",0,3,0,.5f);add("lfoPitch","LFO pitch (semitones)",0,12,0);add("lfoFilter","LFO filter (octaves)",0,4,0);
@@ -203,13 +207,14 @@ public:
   auto set=[&](const char* id,float value){auto* param=state.getParameter(id);param->setValueNotifyingHost(param->convertTo0to1(value));};
   set("mode",float(p.engine));set("cutoff",p.cutoff);set("resonance",p.resonance);set("attack",p.attack);set("decay",p.decay);set("sustain",p.sustain);set("release",p.release);set("wave",p.wave);set("sub",p.sub);set("detune",p.detune);set("chorus",p.chorus);set("env",p.amount);
   set("fattack",p.attack*.6f);set("fdecay",p.decay);set("fsustain",p.sustain*.6f);set("frelease",p.release);
-  set("oscLayer",p.engine==0?0.f:1.f);
+  set("jupiterMix",p.engine==0?0.f:1.f);set("oscLayer",.5f);
   set("envLink",p.engine==0?1.f:0.f);
-  if(index==10 || index==16 || index==19){set("oscLayer",.75f);set("envLink",0);set("slope",0);}
+  if(index==10 || index==16 || index==19){set("jupiterMix",.5f);set("envLink",0);set("slope",0);}
   if(index==10)set("fxDrive",.25f);
   // INIT: the filter has its own envelope, falling back low after each attack, so ENV sweeps every note and FREQ sets
   // the held tone (following the amp envelope it stayed 70 % open and pushed FREQ, and the resonance, far up).
   if(index==0){set("envLink",0);set("fattack",.005f);set("fdecay",.5f);set("fsustain",.2f);set("frelease",.4f);}
+  // Factory sounds are starting points for the new architecture, not legacy-compatible patches.
   if(index>=18){set("reverbMix",.18f);set("reverbSize",.7f);}
   if(index==13 || index==14){set("fattack",.012f);set("fdecay",.48f);set("fsustain",.55f);set("frelease",.22f);set("slope",0);set("keytrack",.35f);set("pwm",0);set("reverbMix",.09f);}
   currentProgram.store(index);state.state.removeProperty("userPresetName",nullptr);state.state.removeProperty("soundName",nullptr);modified.store(false);
@@ -218,17 +223,18 @@ public:
  void changeProgramName(int,const String&) override {}
  void prepareToPlay(double sr,int block) override {
   driveBlock=jmax(1,block);drivePass.reset();drivePass.initProcessing(size_t(driveBlock));
-  arp.prepare(sr);hold.prepare();previousClassic=previousJupiter=0;modulation.lfo.assign(size_t(jmax(block,8192)),0.f);modulation.phase.assign(modulation.lfo.size(),0.f);lfoPhase=0;
+  arp.prepare(sr);hold.prepare();previousSix=previousEight=0;modulation.lfo.assign(size_t(jmax(block,8192)),0.f);modulation.phase.assign(modulation.lfo.size(),0.f);lfoPhase=0;
   sampleRate=sr;echo.prepare(sr);reverb.prepare(sr);
-  synth.setCurrentPlaybackSampleRate(sr); for(int i=0;i<synth.getNumVoices();++i) static_cast<Voice*>(synth.getVoice(i))->prepare(sr);
-  classic.setCurrentPlaybackSampleRate(sr); for(int i=0;i<classic.getNumVoices();++i) static_cast<Voice*>(classic.getVoice(i))->prepare(sr);
+  voices8.setCurrentPlaybackSampleRate(sr); for(int i=0;i<voices8.getNumVoices();++i) static_cast<Voice*>(voices8.getVoice(i))->prepare(sr);
+  voices6.setCurrentPlaybackSampleRate(sr); for(int i=0;i<voices6.getNumVoices();++i) static_cast<Voice*>(voices6.getVoice(i))->prepare(sr);
   ignoreUnused(block);chorus.prepare(sr);
   gain.reset(sr,0.02);gain.setCurrentAndTargetValue(state.getRawParameterValue("gain")->load());
  }
- void releaseResources() override {synth.allNotesOff(0,false);classic.allNotesOff(0,false);chorus.reset();keyboard.reset();arp.reset();hold.reset();echo.reset();reverb.reset();previousClassic=previousJupiter=0;}
+ void releaseResources() override {voices8.allNotesOff(0,false);voices6.allNotesOff(0,false);chorus.reset();keyboard.reset();arp.reset();hold.reset();echo.reset();reverb.reset();previousSix=previousEight=0;}
  bool isBusesLayoutSupported(const BusesLayout& b) const override {return b.getMainOutputChannelSet()==AudioChannelSet::stereo();}
  void processBlock(AudioBuffer<float>& buffer,MidiBuffer& midi) override {
   ScopedNoDenormals noDenormals;buffer.clear();keyboard.processNextMidiBuffer(midi,0,buffer.getNumSamples(),true);
+  if(const int bend=screenPitch.exchange(-1);bend>=0)midi.addEvent(MidiMessage::pitchWheel(1,bend),0);
   if(const int press=screenPressure.exchange(-1);press>=0)midi.addEvent(MidiMessage::channelPressureChange(1,press),0); // trackpad force on the panel keyboard
   // MIDI learn and learned controls. The mod wheel, sustain, bank select and channel messages keep their own jobs.
   for(const auto event:midi){const auto message=event.getMessage();if(!message.isController())continue;
@@ -250,12 +256,12 @@ public:
   }
   arp.process(midi,buffer.getNumSamples(),value("arpOn")>.5f,bpm,division,int(value("arpPattern")),int(value("arpOctaves"))+1,value("arpGate"),samplesToGrid);
   int mode=state.getRawParameterValue("mode")->load()>0.5f?1:0;
-  synth.updateMode();classic.updateMode();
-  if(mode!=lastMode) {synth.allNotesOff(0,false);classic.allNotesOff(0,false);lastMode=mode;}
+  voices8.updateMode();voices6.updateMode();
+  if(mode!=lastMode) {voices8.allNotesOff(0,false);voices6.allNotesOff(0,false);lastMode=mode;}
   double lfoBpm=value("arpTempo");std::optional<double> lfoBeats;
   if(auto* playHead=getPlayHead()) if(auto position=playHead->getPosition()){if(auto hostBpm=position->getBpm())lfoBpm=*hostBpm;if(position->getIsPlaying())if(auto beats=position->getPpqPosition())lfoBeats=*beats;}
   renderLfo(buffer.getNumSamples(),lfoBpm,lfoBeats);
-  (mode==0?classic:synth).renderNextBlock(buffer,midi,0,buffer.getNumSamples());
+  (mode==0?voices6:voices8).renderNextBlock(buffer,midi,0,buffer.getNumSamples());
   chorus.process(buffer,int(value("chorusMode")),value("chorus"));
   // Drive, then the echo.
   // POST drive at twice the sample rate, for the same reason as the voices: its overtones are filtered out, not folded back.
@@ -314,7 +320,7 @@ public:
    // Before state version 4 the high-pass was a four-position switch; it is now one continuous fader (hpfFreq).
    if(int(restored.getProperty("stateVersion",1))<4){for(auto child:restored)if(child.getProperty("id").toString()=="hpf"){static const float positions[]={0.f,.25f,.676f,.922f};
     ValueTree moved("PARAM");moved.setProperty("id","hpfFreq",nullptr);moved.setProperty("value",positions[jlimit(0,3,int(child.getProperty("value")))],nullptr);restored.addChild(moved,-1,nullptr);break;}}
-   restored.setProperty("stateVersion",4,nullptr);
+   restored.setProperty("stateVersion",5,nullptr);
    currentProgram.store(jlimit(0,getNumPrograms()-1,int(restored.getProperty("program",0))));for(auto* base:getParameters())if(auto* parameter=dynamic_cast<RangedAudioParameter*>(base)) {
    bool found=false;for(auto child:restored)if(child.getProperty("id").toString()==parameter->paramID){found=true;break;}
    if(!found){ValueTree child("PARAM");child.setProperty("id",parameter->paramID,nullptr);child.setProperty("value",parameter->convertFrom0to1(parameter->getDefaultValue()),nullptr);restored.addChild(child,-1,nullptr);}
@@ -344,12 +350,13 @@ private:
   }
  }
  ModulationBus modulation;double lfoPhase=0,manualCount=0;
+ public: std::atomic<int> screenPitch{-1};
  public: std::atomic<int> screenPressure{-1}; // set by the panel keyboard (Force Touch), sent as channel pressure
  private:
  std::atomic<bool> modified{false};
  std::atomic<int> currentProgram{0};
- GlideMemory previousClassic,previousJupiter;double sampleRate=44100;Arpeggiator arp;CharacterDelay echo;OrbitReverb reverb;NoteHold hold;
- VoiceAllocator synth,classic;EnsembleChorus chorus;dsp::Oversampling<float> drivePass{2,1,dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,true,false};int driveBlock=512;SmoothedValue<float> gain;int lastMode=-1;
+ GlideMemory previousSix,previousEight;double sampleRate=44100;Arpeggiator arp;CharacterDelay echo;OrbitReverb reverb;NoteHold hold;
+ VoiceAllocator voices8,voices6;EnsembleChorus chorus;dsp::Oversampling<float> drivePass{2,1,dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,true,false};int driveBlock=512;SmoothedValue<float> gain;int lastMode=-1;
 };
 #include "Editor.h"
 AudioProcessorEditor* Orbit::createEditor(){return new Editor(*this);}

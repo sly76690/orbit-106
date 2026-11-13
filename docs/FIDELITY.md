@@ -10,9 +10,9 @@ Toutes les constantes du moteur sont des valeurs de départ réglées à l'oreil
 
 | Bloc | Modèle actuel | Limites |
 |---|---|---|
-| Oscillateurs | scie et impulsion anti-repliées, triangle et sinus simples, sous-oscillateur, bruit par voix | synchro dure non anti-repliée ; pas de dérive ni d'écart entre voix |
+| Oscillateurs | DCO stable + deux VCO indépendants, scie/impulsion polyBLEP, triangle/sinus, carré, bruit, sub DCO ; dérive et écarts VCO par AGE | architecture inspirée, pas une reproduction exacte d’un Jupiter matériel ; synchro dure et triangle non anti-repliés explicitement |
 | LFO | global, quatre formes, délai par note | sur les instruments d'époque le délai ne repart qu'après relâchement de toutes les touches |
-| HPF | quatre positions : renfort, neutre, deux coupe-bas | fréquences et pente choisies à l'oreille |
+| HPF | continu : renfort, neutre, coupe-bas de 40 Hz à 1 kHz | fréquences et pente choisies à l'oreille |
 | Filtre en échelle | quatre étages, résonance rebouclée sans retard, saturation douce | pas d'auto-oscillation ; non calibré |
 | Filtre à état variable | primitive JUCE | générique |
 | Enveloppes | courbes de charge et de décharge | constantes de temps non mesurées |
@@ -33,3 +33,11 @@ Avec un instrument réel ou des enregistrements dont les réglages sont connus :
 ## Validation logicielle
 
 Tests automatiques (`Tests/Smoke.cpp`) : audio à 44,1 / 48 / 96 kHz, extinction des notes, paramètres extrêmes, vol de voix, indépendance à la taille de bloc, arpège, HOLD, mono / unisson / legato, routages de filtres, chorus, délai du LFO, rapidité de l'enveloppe de filtre, HPF, VCA GATE, synchro, cross-modulation, réverbes, rappel des 24 patches, conversion des anciens états, rendu de la façade.
+
+## Architecture version 5
+
+Les modes 6 et 8 voix partagent le même moteur : chaque voix possède un DCO avec sub et bruit et une paire de VCO ; SOURCE MIX mélange les VCO, JUN/JUP mélange les deux sections avant les filtres communs. AGE règle l'accord et la dérive des VCO. Le mode 8 voix ajoute son caractère vintage : écarts par voix de coupure, de temps d'enveloppe et de vitesse de LFO (dosés par AGE), enveloppes qui suivent le clavier et courte attaque brillante.
+
+Le chemin oscillateurs/filtres tourne à 2× la fréquence de sortie puis passe par un filtre demi-bande. Cela réduit le repliement spectral sans garantir son élimination, particulièrement en hard sync et cross-modulation fortes. Les anciens sons ne sont pas préservés.
+
+Les tests d’architecture couvrent l’isolation des sections, les deux mélanges, les six plages, LOW FREQ, AGE, les largeurs indépendantes, l’accord fin bipolaire, SYNC/X-MOD avec source inaudible, le rappel d’état et un benchmark indicatif en unisson.

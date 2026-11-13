@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<OrbitState stateVersion="4" program="0" modified="0">
+<OrbitState stateVersion="5" program="0" modified="0">
   <PARAM id="mode" value="1.0"/>
   <PARAM id="envLink" value="0.0"/>
-  <PARAM id="osc1Shape" value="1.0"/>
-  <PARAM id="osc2Shape" value="2.0"/>
-  <PARAM id="oscLayer" value="0.7"/>
+  <PARAM id="jupiterMix" value="1.0"/>
+  <PARAM id="osc1Shape" value="0.0"/>
+  <PARAM id="osc2Shape" value="1.0"/>
+  <PARAM id="oscLayer" value="0.42"/>
   <PARAM id="osc2Width" value="0.3"/>
   <PARAM id="detune" value="6.0"/>
   <PARAM id="filterAType" value="0.0"/>

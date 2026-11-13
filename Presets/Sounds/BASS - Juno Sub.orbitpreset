@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<OrbitState stateVersion="4" program="0" modified="0">
+<OrbitState stateVersion="5" program="0" modified="0">
   <PARAM id="mode" value="0.0"/>
-  <PARAM id="osc1Shape" value="0.0"/>
-  <PARAM id="oscLayer" value="0.0"/>
+  <PARAM id="jupiterMix" value="0.0"/>
   <PARAM id="wave" value="1.0"/>
   <PARAM id="width" value="0.5"/>
   <PARAM id="sub" value="1.0"/>
@@ -19,5 +18,4 @@
   <PARAM id="chorus" value="0.25"/>
   <PARAM id="hpfFreq" value="0.0"/>
   <PARAM id="atDrive" value="0.4"/>
-  <PARAM id="gain" value="0.55"/>
 </OrbitState>

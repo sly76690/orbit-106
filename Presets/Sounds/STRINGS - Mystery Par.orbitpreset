@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<OrbitState stateVersion="4" program="5" modified="0">
+<OrbitState stateVersion="5" program="5" modified="0">
   <PARAM id="arpDivision" value="1.0"/>
   <PARAM id="arpGate" value="0.6499999165534973"/>
   <PARAM id="arpOctaves" value="0.0"/>
@@ -32,7 +32,7 @@
   <PARAM id="frelease" value="6.238995552062988"/>
   <PARAM id="fsustain" value="0.0"/>
   <PARAM id="fxDrive" value="0.2264238297939301"/>
-  <PARAM id="gain" value="0.699999988079071"/>
+  <PARAM id="gain" value="0.47"/>
   <PARAM id="keytrack" value="0.5"/>
   <PARAM id="legato" value="0.0"/>
   <PARAM id="lfoDelay" value="1.014947533607483"/>
@@ -41,10 +41,10 @@
   <PARAM id="lfoShape" value="1.0"/>
   <PARAM id="mode" value="1.0"/>
   <PARAM id="noise" value="0.0"/>
-  <PARAM id="osc1Level" value="0.2298958748579025"/>
-  <PARAM id="osc1Octave" value="2.0"/>
+  <PARAM id="osc1Level" value="1.0"/>
+  <PARAM id="osc1Octave" value="3.0"/>
   <PARAM id="osc1Shape" value="0.0"/>
-  <PARAM id="osc2Octave" value="2.0"/>
+  <PARAM id="osc2Octave" value="3.0"/>
   <PARAM id="osc2Shape" value="0.0"/>
   <PARAM id="osc2Tune" value="0.0"/>
   <PARAM id="osc2Width" value="0.5"/>
@@ -95,4 +95,5 @@
   <PARAM id="lfoManual" value="0.0"/>
   <PARAM id="lfoTrig" value="0.0"/>
   <PARAM id="atVolume" value="0.25"/>
+  <PARAM id="jupiterMix" value="0.8"/>
 </OrbitState>

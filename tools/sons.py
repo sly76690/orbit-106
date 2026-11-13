@@ -7,7 +7,7 @@ import os
 from xml.sax.saxutils import quoteattr
 
 # Shared starting point of the dual-filter sounds: eight voices, each filter with its own envelope settings.
-DUAL = {"mode": 1, "envLink": 0, "oscLayer": 0, "age": .45, "voiceWidth": .7}
+DUAL = {"mode": 1, "envLink": 0, "jupiterMix": 0, "age": .45, "voiceWidth": .7}   # the JUNO DCO through both filters
 
 SOUNDS = {
     # Two resonant peaks in series: a pad that sounds like a vowel, the second peak closing as the first opens.
@@ -56,20 +56,22 @@ SOUNDS = {
 
 # Standards of the eighties, programmed from scratch on Orbit in the spirit of famous records and of the classic
 # Juno / Jupiter sound types: no factory data from any instrument is copied, only the well-known recipe of each sound.
-CLASSIC = {"mode": 1, "envLink": 0, "osc1Shape": 1, "osc2Shape": 1, "oscLayer": 1}
-JUNO = {"mode": 0, "osc1Shape": 0, "oscLayer": 0}
+# State version 5: JUPITER = the two VCOs (shapes 0 saw, 1 pulse, 2 tri, 3 sine, 4 square, 5 noise; ranges 0 = 64' ... 3 = 8' ... 5 = 2'),
+# oscLayer = VCO 1 / VCO 2 balance, jupiterMix = JUNO DCO / JUPITER VCOs.
+CLASSIC = {"mode": 1, "envLink": 0, "jupiterMix": 1, "osc1Shape": 0, "osc2Shape": 0, "oscLayer": .5}
+JUNO = {"mode": 0, "jupiterMix": 0}
 SOUNDS.update({
     # The big detuned saw brass stab of 1984 (an Oberheim on the record): two saws per voice, every voice a bit off.
     "BRASS - Rooftop Jump": dict(CLASSIC, detune=9, sub=0, filterAType=0, slope=1, cutoff=3000, resonance=.1, env=.25, keytrack=.5,
         attack=.003, decay=.4, sustain=.9, release=.25, fattack=.005, fdecay=.6, fsustain=.6, frelease=.3,
         age=.7, voiceWidth=.8, chorusMode=0, reverbType=1, reverbMix=.1),
     # The dark plucked arpeggio of an eighties-style sci-fi title: hold C E G B, at 84 BPM.
-    "ARP - Upside Down": dict(CLASSIC, oscLayer=.6, detune=5, sub=0, filterAType=0, slope=1, cutoff=500, resonance=.45, env=.55,
+    "ARP - Upside Down": dict(CLASSIC, oscLayer=.38, detune=5, sub=0, filterAType=0, slope=1, cutoff=500, resonance=.45, env=.55,
         attack=.002, decay=.5, sustain=.4, release=.3, fattack=.001, fdecay=.35, fsustain=.1, frelease=.3,
         arpOn=1, arpTempo=84, arpDivision=1, arpPattern=0, arpOctaves=1, arpGate=.6,
         delaySync=6, delayFeedback=.3, delayMix=.15, reverbType=2, reverbSize=.8, reverbMix=.2, chorusMode=0),
     # The haunting mono lead over it: saw and narrow pulse, delayed vibrato, glide, a long space.
-    "LEAD - Upside Lead": dict(CLASSIC, osc2Shape=2, osc2Width=.3, oscLayer=.7, detune=6, filterAType=0, slope=1, cutoff=1400, resonance=.25, env=.35,
+    "LEAD - Upside Lead": dict(CLASSIC, osc2Shape=1, osc2Width=.3, oscLayer=.42, detune=6, filterAType=0, slope=1, cutoff=1400, resonance=.25, env=.35,
         attack=.03, decay=.8, sustain=.8, release=.6, fattack=.02, fdecay=1.0, fsustain=.5, frelease=.6,
         voiceMode=1, legato=1, portamento=.06, lfoDelay=.6, rate=5, lfoPitch=.12,
         delaySync=5, delayFeedback=.35, delayMix=.2, reverbType=2, reverbSize=.85, reverbMix=.3, chorusMode=0),
@@ -80,7 +82,7 @@ SOUNDS.update({
     "BASS - Juno Sub": dict(JUNO, wave=1, width=.5, sub=1, cutoff=380, resonance=.25, env=.45, keytrack=.3, envLink=1,
         attack=.002, decay=.35, sustain=.4, release=.08, chorusMode=1, chorus=.25, hpfFreq=0),
     # The rave hoover: fast-moving pulse an octave down, a pitch swoop, glide and every chorus at once.
-    "LEAD - Hoover": dict(JUNO, osc1Octave=1, wave=.5, width=.3, pwm=.8, pwmSource=0, rate=6, sub=.8, cutoff=6000, resonance=0, env=0,
+    "LEAD - Hoover": dict(JUNO, jupiterMix=1, osc1Shape=1, osc2Shape=1, osc1Octave=2, osc2Octave=2, detune=15, vco1Width=.3, osc2Width=.3, vcoPwm=.8, oscLayer=.5, pwmSource=0, rate=6, cutoff=6000, resonance=0, env=0,
         envLink=0, fattack=.001, fdecay=.25, fsustain=0, frelease=.2, envPitch=-3, attack=.005, decay=.5, sustain=1, release=.3,
         voiceMode=1, portamento=.12, chorusMode=3, chorus=.9),
     # The lush eight-voice saw strings: two detuned saws per voice, slow everything.
@@ -88,7 +90,7 @@ SOUNDS.update({
         attack=1.1, decay=2.0, sustain=.9, release=2.5, fattack=1.2, fdecay=2.0, fsustain=.7, frelease=2.5,
         lfoPitch=.06, rate=5, lfoDelay=1.0, age=.6, voiceWidth=.9, chorusMode=1, chorus=.35, reverbType=2, reverbSize=.8, reverbMix=.25),
     # A synced oscillator swept by the envelope: the metallic bell-lead of the big poly synths.
-    "BELL - Sync Bell": dict(CLASSIC, oscSync=1, osc2Tune=7, envPitch=12, osc1Level=.2, oscLayer=1, filterAType=1, slope=0, cutoff=4000, resonance=.1, env=.2,
+    "BELL - Sync Bell": dict(CLASSIC, oscSync=1, osc2Tune=7, envPitch=12, oscLayer=.85, filterAType=1, slope=0, cutoff=4000, resonance=.1, env=.2,
         attack=.001, decay=2.5, sustain=0, release=2.0, fattack=.001, fdecay=.6, fsustain=0, frelease=1.5,
         chorusMode=1, chorus=.3, delaySync=6, delayFeedback=.3, delayMix=.15, reverbMix=.25),
     # Bright pop chords: saw and sub through a quick filter envelope, chorus I.
@@ -98,7 +100,7 @@ SOUNDS.update({
     "BASS - Funk Pluck": dict(JUNO, wave=.4, sub=.6, cutoff=280, resonance=.55, env=.7, envLink=0, keytrack=.4, velFilter=.4,
         attack=.002, decay=.3, sustain=.6, release=.08, fattack=.001, fdecay=.18, fsustain=0, frelease=.1, voiceMode=1, chorusMode=0),
     # The slow filter sweep pad: closed, then opening over seconds.
-    "PAD - Sweep 82": dict(CLASSIC, oscLayer=.8, detune=10, filterAType=0, slope=1, cutoff=300, resonance=.45, env=.8,
+    "PAD - Sweep 82": dict(CLASSIC, oscLayer=.45, detune=10, filterAType=0, slope=1, cutoff=300, resonance=.45, env=.8,
         attack=.6, decay=3.0, sustain=.9, release=3.0, fattack=2.5, fdecay=4.0, fsustain=.4, frelease=3.0,
         chorusMode=2, chorus=.5, reverbType=2, reverbSize=.75, reverbMix=.2),
     # Synth brass of the Juno kind: one saw, a soft swell of the filter, delayed vibrato.
@@ -121,12 +123,12 @@ PRESSURE = {
     "ARP - Upside Down": dict(atFilter=.4),
     "LEAD - Upside Lead": dict(atFilter=.25, atVolume=.2),
     "PAD - Juno Strings": dict(atFilter=.25, atVolume=.25, wheelDepth=.25),
-    "BASS - Juno Sub": dict(atDrive=.4, gain=.55),
+    "BASS - Juno Sub": dict(atDrive=.4),
     "LEAD - Hoover": dict(atDrive=.5, atLfo=.2),
     "PAD - Jupiter Saw Strings": dict(atFilter=.3, atVolume=.3, wheelDepth=.25),
     "BELL - Sync Bell": dict(atLfo=.3),
     "KEYS - Poly 84": dict(atFilter=.3),
-    "BASS - Funk Pluck": dict(atFilter=.3, atDrive=.3),
+    "BASS - Funk Pluck": dict(atFilter=.3, atDrive=.3, gain=.95),
     "PAD - Sweep 82": dict(atFilter=.3, atLfo=.25, wheelDepth=.25),
     "BRASS - Juno Brass": dict(atFilter=.35, atVolume=.3, wheelDepth=.3),
 }
@@ -136,7 +138,7 @@ for name, extra in PRESSURE.items():
 folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Presets", "Sounds")
 os.makedirs(folder, exist_ok=True)
 for name, settings in SOUNDS.items():
-    lines = ['<?xml version="1.0" encoding="UTF-8"?>', '<OrbitState stateVersion="4" program="0" modified="0">']
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>', '<OrbitState stateVersion="5" program="0" modified="0">']
     lines += ['  <PARAM id=%s value="%s"/>' % (quoteattr(key), repr(float(value))) for key, value in settings.items()]
     lines.append('</OrbitState>')
     with open(os.path.join(folder, name + ".orbitpreset"), "w", encoding="utf-8") as handle:

@@ -1,52 +1,66 @@
 #!/bin/bash
-# Builds the macOS installer:  build/Orbit106-<version>.pkg
-# It installs the AU and VST3 plug-ins, the standalone application, the rendered artwork and the sounds (Presets/Sounds) for every user.
-# Usage:  bash tools/paquet.sh        (after a build and a final render: bash tools/rendu.sh final)
-set -e
+# Build the installer inside the project. Does not install or modify Library.
+# The current panel and Midnight Signals are embedded in the compiled binaries.
+set -euo pipefail
 cd "$(dirname "$0")/.."
-VERSION=$(sed -n 's/^project(Orbit106 VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt); VERSION=${VERSION:-0.1.0}
+PROJECT_DIR="$(pwd -P)"
+case "$PROJECT_DIR" in /|"$HOME") echo "Refusing packaging outside a project."; exit 1;; esac
+for directory in build .local-cache; do
+  [ ! -L "$directory" ] || { echo "Refusing symlink: $directory"; exit 1; }
+done
+mkdir -p build .local-cache
+export TMPDIR="$PROJECT_DIR/.local-cache"
+VERSION=$(sed -n 's/^project(Orbit106 VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+[ -n "$VERSION" ] || { echo "Missing project version"; exit 1; }
 OUT="build/Orbit106_artefacts/Release"
-SKIN="$HOME/Library/Application Support/SF Instruments/Orbit 106/Skin"
-STAGE="build/pkg-root"; PKG="build/Orbit106-$VERSION.pkg"
-
+PKG="$PROJECT_DIR/build/Orbit106-$VERSION.pkg"
+[ ! -L "$PKG" ] || { echo "Refusing output symlink"; exit 1; }
 for item in "$OUT/AU/Orbit 106.component" "$OUT/VST3/Orbit 106.vst3" "$OUT/Standalone/Orbit 106.app"; do
-  [ -e "$item" ] || { echo "Manquant : $item — compile d'abord (cmake --build build)."; exit 1; }
+  [ -d "$item" ] || { echo "Missing: $item; build first."; exit 1; }
 done
-for image in background.jpg knob.png fader.png led.png index_amber.png index_teal.png index_neutral.png layout.rendered.json; do
-  [ -f "$SKIN/$image" ] || { echo "Rendu manquant : $image — lance d'abord  bash tools/rendu.sh final"; exit 1; }
-done
-if ! diff -q <(tr -d '\r' < "$SKIN/layout.json") <(tr -d '\r' < "$SKIN/layout.rendered.json") >/dev/null; then
-  echo "Le rendu ne correspond plus à la disposition actuelle : ouvre Orbit une fois, puis  bash tools/rendu.sh final"; exit 1
-fi
-
-rm -rf "$STAGE"; rm -f "$PKG"
-mkdir -p "$STAGE/Library/Audio/Plug-Ins/Components" "$STAGE/Library/Audio/Plug-Ins/VST3" "$STAGE/Applications" \
-         "$STAGE/Library/Application Support/SF Instruments/Orbit 106/Skin"
+WORK=$(mktemp -d "$PROJECT_DIR/build/pkg-stage.XXXXXX")
+trap 'rm -rf "$WORK"' EXIT
+STAGE="$WORK/root"
+mkdir -p "$STAGE/Library/Audio/Plug-Ins/Components" "$STAGE/Library/Audio/Plug-Ins/VST3" "$STAGE/Applications"
 ditto "$OUT/AU/Orbit 106.component" "$STAGE/Library/Audio/Plug-Ins/Components/Orbit 106.component"
 ditto "$OUT/VST3/Orbit 106.vst3" "$STAGE/Library/Audio/Plug-Ins/VST3/Orbit 106.vst3"
 ditto "$OUT/Standalone/Orbit 106.app" "$STAGE/Applications/Orbit 106.app"
-for image in background.jpg knob.png fader.png led.png index_amber.png index_teal.png index_neutral.png layout.rendered.json; do
-  cp "$SKIN/$image" "$STAGE/Library/Application Support/SF Instruments/Orbit 106/Skin/"
+SOUNDS="$STAGE/Library/Application Support/SF Instruments/Orbit 106/Presets/Sounds"
+mkdir -p "$SOUNDS"
+count=0
+for sound in Presets/Sounds/*.orbitpreset Presets/MidnightSignals/*.orbitpreset; do
+  [ -f "$sound" ] || continue
+  cp "$sound" "$SOUNDS/"
+  count=$((count + 1))
 done
-# The sounds shipped with Orbit (menu SOUNDS), from the project's Presets/Sounds folder.
-SOUNDS="$STAGE/Library/Application Support/SF Instruments/Orbit 106/Presets/Sounds"; mkdir -p "$SOUNDS"
-count=0; for sound in Presets/Sounds/*.orbitpreset; do [ -f "$sound" ] && cp "$sound" "$SOUNDS/" && count=$((count + 1)); done
-echo "Sons inclus : $count"
+cp Presets/MidnightSignals/README.md "$STAGE/Library/Application Support/SF Instruments/Orbit 106/Midnight Signals.md"
+echo "Sons inclus : $count (dont 16 Midnight Signals, également intégrés aux binaires)"
 find "$STAGE" -name ".DS_Store" -delete
 xattr -cr "$STAGE"
-chmod -R u+w,go+rX "$STAGE"   # pkgbuild complains about files it cannot write (read-only copies)
-
-# Without this, the installer may "relocate" a bundle: update a copy it finds elsewhere (the build folder) instead of installing.
-PLIST="build/pkg-components.plist"
+chmod -R u+w,go+rX "$STAGE"
+# Re-sign staged bundles after the VST3 manifest/resource generation has finished.
+for bundle in "$STAGE/Applications/Orbit 106.app" "$STAGE/Library/Audio/Plug-Ins/Components/Orbit 106.component" "$STAGE/Library/Audio/Plug-Ins/VST3/Orbit 106.vst3"; do
+  codesign --force --deep --sign - "$bundle"
+  codesign --verify --deep --strict "$bundle"
+done
+python3 - "$STAGE" "$PKG.payload.json" <<'PYMANIFEST'
+import hashlib, json, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+manifest = {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in root.rglob('*') if p.is_file()}
+Path(sys.argv[2]).write_text(json.dumps(manifest, indent=2))
+PYMANIFEST
+# Keep the installation at its intended destination, rather than relocating to a build copy.
+PLIST="$WORK/components.plist"
 pkgbuild --analyze --root "$STAGE" "$PLIST" >/dev/null
 index=0
 while /usr/libexec/PlistBuddy -c "Print :$index" "$PLIST" >/dev/null 2>&1; do
-  for key in BundleIsRelocatable BundleIsVersionChecked; do   # never relocate; always replace, whatever version is installed
+  for key in BundleIsRelocatable BundleIsVersionChecked; do
     /usr/libexec/PlistBuddy -c "Set :$index:$key false" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :$index:$key bool false" "$PLIST"
   done
   index=$((index + 1))
 done
-
-pkgbuild --root "$STAGE" --component-plist "$PLIST" --identifier com.sfinstruments.orbit106.pkg --version "$VERSION" --install-location / "$PKG" >/dev/null
-rm -rf "$STAGE" "$PLIST"
+pkgbuild --root "$STAGE" --component-plist "$PLIST" --identifier com.sfinstruments.orbit106.pkg --version "$VERSION" --install-location / "$WORK/Orbit106.pkg"
+mv -f "$WORK/Orbit106.pkg" "$PKG"
 echo "Installeur prêt : $PKG"

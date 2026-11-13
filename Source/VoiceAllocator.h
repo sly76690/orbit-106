@@ -24,6 +24,15 @@ public:
   else if(active>=0 && active/128+1==channel)for(auto* v:voices)v->controllerMoved(cc,amount);
  }
  void handlePitchWheel(int channel,int amount) override {if(mode==0)Synthesiser::handlePitchWheel(channel,amount);else if(active>=0&&active/128+1==channel)for(auto* v:voices)v->pitchWheelMoved(amount);}
+ // Legato retargeting keeps JUCE voice metadata on the original key; route pressure by our active key.
+ void handleAftertouch(int channel,int note,int amount) override {
+  if(mode==0)Synthesiser::handleAftertouch(channel,note,amount);
+  else if(active>=0&&active%128==note&&(channel<=0||active/128+1==channel))for(auto* v:voices)if(v->isVoiceActive())v->aftertouchChanged(amount);
+ }
+ void handleChannelPressure(int channel,int amount) override {
+  if(mode==0)Synthesiser::handleChannelPressure(channel,amount);
+  else if(active>=0&&(channel<=0||active/128+1==channel))for(auto* v:voices)if(v->isVoiceActive())v->channelPressureChanged(amount);
+ }
 protected:
  // The wide instrument hands notes to its voices in turn, so repeated notes do not always fall on the same voice
  // (each one has its own small errors and its own place in the stereo field).
