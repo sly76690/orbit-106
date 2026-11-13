@@ -1,5 +1,6 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_dsp/juce_dsp.h>
+#include <map>
 
 using namespace juce;
 #include "Arpeggiator.h"
@@ -34,9 +35,42 @@ public:
  Result saveUserPreset(const String& name,bool replace=false){auto saved=state.copyState();saved.setProperty("program",currentProgram.load(),nullptr);saved.setProperty("modified",false,nullptr);saved.setProperty("userPresetName",name,nullptr);auto xml=saved.createXml();auto result=PresetStorage(presetRoot()).save(name,*xml,replace);if(result.wasOk()){state.state.setProperty("userPresetName",name,nullptr);modified.store(false);}return result;}
  Result loadUserPreset(const String& name){auto xml=PresetStorage(presetRoot()).load(name);if(!xml)return Result::fail("Preset absent, invalide ou inaccessible dans Presets/User.");MemoryBlock data;copyXmlToBinary(*xml,data);setStateInformation(data.getData(),int(data.getSize()));state.state.setProperty("userPresetName",name,nullptr);modified.store(false);return Result::ok();}
  bool isPatchModified() const {return modified.load();}
+  // Host pages of eight, in the order of the front panel.
+  static constexpr const char* hostPages[]={
+   "wave","width","pwm","sub","noise","osc1Shape","osc1Octave","osc1Level",                    // OSC I
+   "oscLayer","osc2Width","osc2Tune","detune","osc2Shape","osc2Octave","oscSync","crossMod",     // OSC II
+   "cutoff","resonance","env","keytrack","lfoFilter","hpf","slope","filterAType",               // FILTER A
+   "attack","decay","sustain","release","velocity","vcaMode","portamento","legato",            // AMP
+   "fattack","fdecay","fsustain","frelease","envLink","envInvert","envPitch","pwmSource",       // FILTER ENVELOPE
+   "rate","lfoDelay","lfoShape","lfoPitch","wheelDepth","bendRange","bendFilter","unisonSpread",// LFO, BEND
+   "filterBType","cutoffB","resonanceB","envB","slopeB","filterRoute","filterBlend","voiceDrive",// FILTER B, ROUTING
+   "mode","voiceMode","age","voiceWidth","hold","chorusMode","chorus","gain",                  // VOICES, CHORUS, OUTPUT
+   "arpOn","arpSync","arpPattern","arpDivision","arpOctaves","arpTempo","arpGate","fxDrive",    // ARPEGGIO
+   "delayTime","delaySync","delayFeedback","delayMod","delayMix","reverbType","reverbSize","reverbDamp", // DELAY, REVERB
+   "reverbColor","reverbMix"};
+  // Short names for the host and controller displays (Push shows about a dozen characters).
+  static String label(const String& id,const String& longName){
+   static const std::map<String,String> names{
+    {"wave","Osc1 SawPls"},{"width","Osc1 Width"},{"pwm","Osc1 PWM"},{"sub","Sub Level"},{"noise","Noise"},{"osc1Shape","Osc1 Wave"},{"osc1Octave","Osc1 Octave"},{"osc1Level","Osc1 Level"},
+    {"oscLayer","Osc2 Level"},{"osc2Width","Osc2 Width"},{"osc2Tune","Osc2 Tune"},{"detune","Osc2 Fine"},{"osc2Shape","Osc2 Wave"},{"osc2Octave","Osc2 Octave"},{"oscSync","Osc2 Sync"},{"crossMod","X-Mod"},
+    {"cutoff","A Freq"},{"resonance","A Reso"},{"env","A Env"},{"keytrack","Filter Kybd"},{"lfoFilter","Filter LFO"},{"hpf","HPF"},{"slope","A Slope"},{"filterAType","A Model"},
+    {"attack","Amp Attack"},{"decay","Amp Decay"},{"sustain","Amp Sustain"},{"release","Amp Release"},{"velocity","Velocity"},{"vcaMode","VCA Mode"},{"portamento","Portamento"},{"legato","Legato"},
+    {"fattack","Flt Attack"},{"fdecay","Flt Decay"},{"fsustain","Flt Sustain"},{"frelease","Flt Release"},{"envLink","Flt Env Src"},{"envInvert","A Env Pol"},{"envPitch","Env>Pitch"},{"pwmSource","PWM Source"},
+    {"rate","LFO Rate"},{"lfoDelay","LFO Delay"},{"lfoShape","LFO Wave"},{"lfoPitch","LFO Pitch"},{"wheelDepth","Wheel Vib"},{"bendRange","Bend Range"},{"bendFilter","Bend>Filter"},{"unisonSpread","Uni Spread"},
+    {"filterBType","B Model"},{"cutoffB","B Freq"},{"resonanceB","B Reso"},{"envB","B Env"},{"slopeB","B Slope"},{"filterRoute","Routing"},{"filterBlend","A/B Mix"},{"voiceDrive","Drive Pre"},
+    {"mode","Voices"},{"voiceMode","Assign"},{"age","Age"},{"voiceWidth","Width"},{"hold","Hold"},{"chorusMode","Chorus"},{"chorus","Chorus Mix"},{"gain","Volume"},
+    {"arpOn","Arp On"},{"arpSync","Arp Sync"},{"arpPattern","Arp Mode"},{"arpDivision","Arp Step"},{"arpOctaves","Arp Range"},{"arpTempo","Arp Tempo"},{"arpGate","Arp Gate"},{"fxDrive","Drive Post"},
+    {"delayTime","Dly Time"},{"delaySync","Dly Sync"},{"delayFeedback","Dly Fdbk"},{"delayMod","Dly Mod"},{"delayMix","Dly Level"},{"reverbType","Rev Type"},{"reverbSize","Rev Size"},{"reverbDamp","Rev Damp"},
+    {"reverbColor","Rev Color"},{"reverbMix","Rev Level"}};
+   const auto found=names.find(id);return found!=names.end()?found->second:longName;
+  }
  static AudioProcessorValueTreeState::ParameterLayout parameters() {
-  AudioProcessorValueTreeState::ParameterLayout l;
-  l.add(std::make_unique<AudioParameterChoice>(ParameterID{"mode",1},"Voices",StringArray{"6 voices","8 voices"},0));
+   // Parameters are made in any order, then handed to the host page by page (see hostPages): a controller that shows
+   // eight at a time, such as Push, walks through the instrument section by section. Ids never change, so presets,
+   // sessions and automation are unaffected; only the order and the short names the host shows are set here.
+   std::vector<std::unique_ptr<RangedAudioParameter>> made;
+   auto keep=[&made](auto parameter){made.push_back(std::move(parameter));};
+  keep(std::make_unique<AudioParameterChoice>(ParameterID{"mode",1},label("mode","Voices"),StringArray{"6 voices","8 voices"},0));
   // Values are shown on the scale printed around the control: the eleven marks read 0 to 10 (or -5 to +5 for a
   // control centred on zero), so mark 3 always displays 3.0. Controls with a real unit add it in brackets,
   // for example "4.0 (120 BPM)" or "6.3 (1800 Hz)".
@@ -52,28 +86,28 @@ public:
     return shown;
    };
    auto parse=[range,centred](const String& typed){return range.convertFrom0to1(jlimit(0.f,1.f,(typed.getFloatValue()+(centred?5.f:0.f))/10.f));};
-   l.add(std::make_unique<AudioParameterFloat>(ParameterID{id,1},name,range,def,AudioParameterFloatAttributes().withStringFromValueFunction(text).withValueFromStringFunction(parse)));
+   keep(std::make_unique<AudioParameterFloat>(ParameterID{id,1},label(id,name),range,def,AudioParameterFloatAttributes().withStringFromValueFunction(text).withValueFromStringFunction(parse)));
   };
   add("wave","Saw / Pulse",0,1,0.35f);add("width","Pulse width",0.08f,0.92f,0.5f);add("sub","Sub level",0,1,0.7f);add("detune","Detune (cents)",0,30,8);
   add("cutoff","Cutoff (Hz)",25,18000,1800,0.3f);add("resonance","Resonance",0,0.95f,0.2f);add("env","Filter envelope",0,1,0.35f);
   add("attack","Attack (s)",0.002f,5,0.02f,0.35f);add("decay","Decay (s)",0.01f,5,0.6f,0.4f);add("sustain","Sustain",0,1,0.7f);add("release","Release (s)",0.01f,8,0.8f,0.4f);
   add("rate","LFO (Hz)",0.05f,12,0.6f,0.4f);add("pwm","PWM depth",0,1,0.3f);add("chorus","Chorus",0,1,0.35f);add("gain","Output",0,1,0.7f);
   add("fattack","Filter attack",0.002f,5,0.02f,0.35f);add("fdecay","Filter decay",0.01f,5,0.6f,0.4f);add("fsustain","Filter sustain",0,1,0.3f);add("frelease","Filter release",0.01f,8,0.8f,0.4f);
-  l.add(std::make_unique<AudioParameterChoice>(ParameterID{"hpf",1},"High-pass",StringArray{"0 BASS BOOST","1 FLAT","2","3"},1));add("keytrack","Filter key track",0,1,0.5f);add("noise","Noise",0,1,0);add("velocity","Velocity",0,1,0);
-  l.add(std::make_unique<AudioParameterChoice>(ParameterID{"slope",1},"Filter A slope",StringArray{"12 dB","24 dB"},1));
-  l.add(std::make_unique<AudioParameterChoice>(ParameterID{"chorusMode",1},"Chorus mode",StringArray{"OFF","I","II","I+II"},1));
+  keep(std::make_unique<AudioParameterChoice>(ParameterID{"hpf",1},label("hpf","High-pass"),StringArray{"0 BASS BOOST","1 FLAT","2","3"},1));add("keytrack","Filter key track",0,1,0.5f);add("noise","Noise",0,1,0);add("velocity","Velocity",0,1,0);
+  keep(std::make_unique<AudioParameterChoice>(ParameterID{"slope",1},label("slope","Filter A slope"),StringArray{"12 dB","24 dB"},1));
+  keep(std::make_unique<AudioParameterChoice>(ParameterID{"chorusMode",1},label("chorusMode","Chorus mode"),StringArray{"OFF","I","II","I+II"},1));
   add("portamento","Portamento (s)",0,2,0,0.4f);
-  l.add(std::make_unique<AudioParameterBool>(ParameterID{"arpOn",1},"Arpeggiator",false));
-  l.add(std::make_unique<AudioParameterBool>(ParameterID{"arpSync",1},"Host tempo",false));
+  keep(std::make_unique<AudioParameterBool>(ParameterID{"arpOn",1},label("arpOn","Arpeggiator"),false));
+  keep(std::make_unique<AudioParameterBool>(ParameterID{"arpSync",1},label("arpSync","Host tempo"),false));
   add("arpTempo","Arp tempo",40,240,120);add("arpGate","Arp gate",0.1f,0.95f,0.65f);
-  l.add(std::make_unique<AudioParameterChoice>(ParameterID{"arpDivision",1},"Arp division",StringArray{"1/4","1/8","1/16"},1));
-  l.add(std::make_unique<AudioParameterChoice>(ParameterID{"arpPattern",1},"Arp pattern",StringArray{"UP","DOWN","UP/DOWN","RANDOM"},0));
-  l.add(std::make_unique<AudioParameterChoice>(ParameterID{"arpOctaves",1},"Arp octaves",StringArray{"1 OCT","2 OCT","3 OCT"},0));
+  keep(std::make_unique<AudioParameterChoice>(ParameterID{"arpDivision",1},label("arpDivision","Arp division"),StringArray{"1/4","1/8","1/16"},1));
+  keep(std::make_unique<AudioParameterChoice>(ParameterID{"arpPattern",1},label("arpPattern","Arp pattern"),StringArray{"UP","DOWN","UP/DOWN","RANDOM"},0));
+  keep(std::make_unique<AudioParameterChoice>(ParameterID{"arpOctaves",1},label("arpOctaves","Arp octaves"),StringArray{"1 OCT","2 OCT","3 OCT"},0));
   add("fxDrive","Drive",0,1,0);add("delayTime","Delay time (s)",0.03f,1.5f,0.3f);add("delayFeedback","Delay feedback",0,1.1f,0.3f);add("delayMod","Delay modulation",0,1,0.3f);add("delayMix","Delay mix",0,0.65f,0);
   add("reverbSize","Reverb size",0,1,0.5f);add("reverbDamp","Reverb damping",0,1,0.5f);add("reverbMix","Reverb mix",0,0.65f,0);add("reverbColor","Reverb color",0,1,0.4f);
   add("oscLayer","Oscillator II layer",0,1,0);
-  l.add(std::make_unique<AudioParameterBool>(ParameterID{"envLink",1},"Link filter to amp envelope",true));
-  auto choice=[&](const char* id,const char* name,StringArray values,int initial=0){l.add(std::make_unique<AudioParameterChoice>(ParameterID{id,1},name,values,initial));};
+  keep(std::make_unique<AudioParameterBool>(ParameterID{"envLink",1},label("envLink","Link filter to amp envelope"),true));
+  auto choice=[&](const char* id,const char* name,StringArray values,int initial=0){keep(std::make_unique<AudioParameterChoice>(ParameterID{id,1},label(id,name),values,initial));};
   choice("osc1Shape","Oscillator I shape",{"Legacy mix","Saw","Pulse","Triangle","Sine"});
   choice("osc2Shape","Oscillator II shape",{"Legacy mix","Saw","Pulse","Triangle","Sine"});
   add("osc1Level","Oscillator I level",0,1,1);add("osc2Width","Oscillator II pulse width",.08f,.92f,.5f);
@@ -85,11 +119,11 @@ public:
   add("envPitch","Envelope pitch (semitones)",-24,24,0);add("wheelDepth","Mod wheel vibrato (semitones)",0,12,1);
   choice("reverbType","Reverb type",{"VINT","PLATE","SPACE"});
   choice("delaySync","Delay sync",{"FREE","1/2","1/4 D","1/4","1/4 T","1/8 D","1/8","1/8 T","1/16 D","1/16","1/16 T"});
-  l.add(std::make_unique<AudioParameterBool>(ParameterID{"hold",1},"Hold",false));l.add(std::make_unique<AudioParameterBool>(ParameterID{"oscSync",1},"Oscillator II sync",false));add("crossMod","Cross modulation II > I",0,1,0);
+  keep(std::make_unique<AudioParameterBool>(ParameterID{"hold",1},label("hold","Hold"),false));keep(std::make_unique<AudioParameterBool>(ParameterID{"oscSync",1},label("oscSync","Oscillator II sync"),false));add("crossMod","Cross modulation II > I",0,1,0);
   choice("vcaMode","VCA mode",{"Envelope","Gate"});choice("envInvert","Filter A envelope polarity",{"Normal","Inverted"});choice("pwmSource","PWM source",{"LFO","Manual","Envelope"});
   add("bendFilter","Pitch bend to filter (octaves)",0,3,0);
   choice("voiceMode","Voice mode",{"Poly","Mono","Unison"});
-  l.add(std::make_unique<AudioParameterBool>(ParameterID{"legato",1},"Legato envelopes",false));
+  keep(std::make_unique<AudioParameterBool>(ParameterID{"legato",1},label("legato","Legato envelopes"),false));
   add("voiceDrive","Voice drive",0,1,.3f);add("age","Age",0,1,.3f);add("voiceWidth","Voice width",0,1,.5f);
   add("unisonSpread","Unison detune (cents)",0,40,12);add("bendRange","Pitch bend (semitones)",0,24,2);
   choice("filterRoute","Filter routing",{"A only","B only","A > B","B > A","Parallel"});
@@ -98,6 +132,9 @@ public:
   add("cutoffB","Filter B cutoff (Hz)",25,18000,1800,.3f);add("resonanceB","Filter B resonance",0,.95f,.2f);
   choice("slopeB","Filter B slope",{"12 dB","24 dB"},1);
   add("filterBlend","Parallel A / B balance",0,1,.5f);add("envB","Filter B envelope",-1,1,.35f);
+   AudioProcessorValueTreeState::ParameterLayout l;
+   for(const char* id:hostPages)for(auto& parameter:made)if(parameter&&parameter->paramID==id)l.add(std::move(parameter));
+   for(auto& parameter:made)if(parameter)l.add(std::move(parameter)); // anything not placed on a page goes last, never lost
   return l;
  }
  const String getName() const override {return "Orbit 106";}

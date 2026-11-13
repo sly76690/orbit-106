@@ -4,6 +4,7 @@
 #include "../Source/Arpeggiator.h"
 #include "../Source/PresetStorage.h"
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter();
+static juce::AudioProcessorParameter* parameterOf(juce::AudioProcessor& p,const char* id){for(auto* b:p.getParameters())if(auto* r=dynamic_cast<juce::RangedAudioParameter*>(b))if(r->paramID==id)return b;return nullptr;}
 int main() {
  juce::ScopedJuceInitialiser_GUI gui;
  for(int blockSize:{17,256,1024}) {
@@ -76,7 +77,7 @@ int main() {
  for(double sr:{44100.0,48000.0,96000.0}) {
   p->setRateAndBufferSizeDetails(sr,256);p->prepareToPlay(sr,256);
   for(int mode=0;mode<2;++mode) {
-   p->getParameters()[0]->setValueNotifyingHost(float(mode));
+   parameterOf(*p,"mode")->setValueNotifyingHost(float(mode));
    juce::AudioBuffer<float> b(2,256);juce::MidiBuffer m;
    m.addEvent(juce::MidiMessage::noteOn(1,60,0.8f),17);double energy=0;
    for(int block=0;block<100;++block) {
@@ -94,7 +95,7 @@ int main() {
  p->setRateAndBufferSizeDetails(48000,256);p->prepareToPlay(48000,256);
  for(auto* parameter:p->getParameters()) parameter->setValueNotifyingHost(1.f);
  for(int mode=0;mode<2;++mode) {
-  p->getParameters()[0]->setValueNotifyingHost(float(mode));
+  parameterOf(*p,"mode")->setValueNotifyingHost(float(mode));
   for(int size:{1,17,256}) {
    juce::AudioBuffer<float> b(2,size);juce::MidiBuffer midi;
    for(int note=24;note<108;note+=3) midi.addEvent(juce::MidiMessage::noteOn(1,note,1.f),0);
@@ -110,6 +111,11 @@ int main() {
  p->getParameters()[0]->setValueNotifyingHost(0);p->setStateInformation(state.getData(),int(state.getSize()));
  if(p->getParameters()[0]->getValue()!=1.f) return 4;
  std::cout<<"PASS state restore\n";
+ // Host pages: the panel order for controllers such as Push, every parameter present once, short names.
+ {auto* first=dynamic_cast<juce::RangedAudioParameter*>(p->getParameters()[0]);auto* ninth=dynamic_cast<juce::RangedAudioParameter*>(p->getParameters()[8]);
+  if(!first||first->paramID!="wave"||!ninth||ninth->paramID!="oscLayer"||p->getParameters().size()!=82)return 74;
+  for(auto* b:p->getParameters())if(b->getName(100).length()>12){std::cerr<<"Parameter name too long for a controller: "<<b->getName(100)<<"\n";return 75;}}
+ std::cout<<"PASS host pages of eight with short names\n";
  p->setRateAndBufferSizeDetails(48000,256);p->prepareToPlay(48000,256);
  for(int preset=0;preset<p->getNumPrograms();++preset) {
   p->setCurrentProgram(preset);

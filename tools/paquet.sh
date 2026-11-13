@@ -30,6 +30,7 @@ for image in background.jpg knob.png fader.png led.png index_amber.png index_tea
 done
 find "$STAGE" -name ".DS_Store" -delete
 xattr -cr "$STAGE"
+chmod -R u+w,go+rX "$STAGE"   # pkgbuild complains about files it cannot write (read-only copies)
 
 # Without this, the installer may "relocate" a bundle: update a copy it finds elsewhere (the build folder) instead of installing.
 PLIST="build/pkg-components.plist"
