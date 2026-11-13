@@ -126,6 +126,22 @@ public:
    Rectangle<float> cap(pos-12,well.getY()+2,24,18);g.setGradientFill(ColourGradient(Colour(0xff333633),cap.getX(),cap.getY(),Colour(0xff060707),cap.getX(),cap.getBottom(),false));g.fillRoundedRectangle(cap,2);
    g.setColour(ink);g.fillRect(pos-1,cap.getY()+2,2.f,cap.getHeight()-4);return;
   }
+  if(slider.getProperties().contains("lever")){ // a chrome lever riding in a slot on a brushed plate, one stop per position
+   const float cx=float(x)+float(w)*.5f;const auto plate=Rectangle<float>(cx-9,float(y)-4,18,float(h)+8);
+   g.setGradientFill(ColourGradient(Colour(0xff3a3c3e),plate.getX(),0,Colour(0xff1c1d1e),plate.getRight(),0,false));g.fillRoundedRectangle(plate,3);
+   g.setColour(Colour(0xff626466));g.drawRoundedRectangle(plate,3,.7f);
+   g.setColour(Colour(0xff010101));g.fillRoundedRectangle(cx-2.5f,float(y)+2,5,float(h)-4,2.5f);           // the slot
+   const int stops=int(slider.getProperties()["marks"]);for(int i=0;i<=stops;++i){const float yy=float(y)+float(h)*float(i)/float(jmax(1,stops));
+    g.setColour(dim);g.fillRect(cx+11,yy-.6f,5.f,1.2f);}                                                       // stop marks beside the plate
+   const auto bat=Rectangle<float>(cx-6,pos-9,12,18);                                                           // the lever head
+   g.setColour(Colours::black.withAlpha(.5f));g.fillRoundedRectangle(bat.translated(1.5f,2.f),3);
+   ColourGradient chrome(Colour(0xff6d7073),bat.getX(),0,Colour(0xff4a4d50),bat.getRight(),0,false);
+   chrome.addColour(.35,Colour(0xffe9ecee));chrome.addColour(.55,Colour(0xffa9adb1));g.setGradientFill(chrome);g.fillRoundedRectangle(bat,3);
+   g.setColour(Colours::white.withAlpha(.55f));g.drawHorizontalLine(int(bat.getY())+2,bat.getX()+2,bat.getRight()-2);
+   g.setColour(Colours::black.withAlpha(.35f));g.drawRoundedRectangle(bat,3,.8f);
+   g.setColour(Colours::black.withAlpha(.25f));for(float k:{-3.f,0.f,3.f})g.drawHorizontalLine(int(bat.getCentreY()+k),bat.getX()+2,bat.getRight()-2); // grip
+   return;
+  }
   if(slider.getProperties().contains("pitchWheel")){ // Orbit's bender: a dark knurled drum turning in a metal-framed well
    const auto well=Rectangle<float>(float(x+w/2-21),float(y),42.f,float(h));
    g.setColour(Colour(0xff2c2e30));g.fillRoundedRectangle(well.expanded(3.f),5.f);                     // metal frame
@@ -294,6 +310,7 @@ public:
   for (int i = 0; i <= last; ++i) legends[i]->setBounds(x, 4 + (getHeight() - 24) * i / last, width, 16); // one name level with each stop
  }
  void mouseDown(const MouseEvent& event) override { if (event.x > slider.getRight()) attachment.setValueAsCompleteGesture(float(jlimit(0, last, roundToInt(float(event.y - 12) * float(last) / float(getHeight() - 24))))); }
+ void setLever() { slider.getProperties().set("lever", true); for (auto* text : legends) text->setFont(orbitui::face(11.f)); }
  void hideLegends() { for (auto* text : legends) text->setVisible(false); } // printed on the rendered panel instead
 private:
  int last; Slider slider; OwnedArray<Label> legends; ParameterAttachment attachment;
@@ -625,7 +642,8 @@ private:
   using namespace orbitui;
   auto osc=section("JUPITER / DUAL VCO",amber,{32,row2Y,560,row2H});
   for(int i=0;i<2;++i){const int y=osc.getY()+i*92;
-   caption(i?"VCO 2":"VCO 1",{osc.getX(),y+40,43,22},-1,14,print);labels.getLast()->setColour(Label::backgroundColourId,neutral);
+   caption(i?"VCO 2":"VCO 1",{osc.getX(),y+40,43,22},-1,14);labels.getLast()->setFont(face(17.f,true).withExtraKerningFactor(.04f));labels.getLast()->setMinimumHorizontalScale(.5f); // printed like the rest of the panel
+   tagRules.push_back(Rectangle<float>(float(osc.getX()+6),float(y+62),31.f,2.f));                                                 // with a short amber rule under it
    chipChoice(i?"osc2Shape":"osc1Shape","WAVE",{"SAW","PULSE","TRI","SINE","SQR","NOISE"},{osc.getX()+47,y+8,197,64});
    caption("RANGE",{osc.getX()+251,y,96,14},-1,12);
    auto& range=addControl(i?"osc2Octave":"osc1Octave",Slider::RotaryHorizontalVerticalDrag,{osc.getX()+251,y+14,96,74},-1);
@@ -659,9 +677,9 @@ private:
  }
  void buildLowerRow(){
   using namespace orbitui;
-  auto area=section("VOICES",teal,{32,lowerY,300,lowerH});auto cells=split(area,{1,2.2f,.9f,.9f,1.2f,.8f});
+  auto area=section("VOICES",teal,{32,lowerY,300,lowerH});auto cells=split(area,{1,2.05f,.9f,.9f,1.75f,.5f});
   chipChoice("mode","COUNT",{"6","8"},cells[0].withHeight(65));chipChoice("voiceMode","",{"POLY","MONO","UNI"},cells[1].withHeight(65));
-  compactKnob("age","AGE",cells[2]);compactKnob("voiceWidth","WIDTH",cells[3]);menuChoice("vcaMode","VCA",cells[4]);printedToggle("hold","HOLD",cells[5].withTrimmedTop(18));
+  compactKnob("age","AGE",cells[2]);compactKnob("voiceWidth","WIDTH",cells[3]);chipChoice("vcaMode","VCA",{"ENV","GATE","F.ENV"},cells[4].withHeight(79),true);switches.getLast()->setLever();printedToggle("hold","HOLD",cells[5].withTrimmedTop(18).expanded(6,0).withRight(area.getRight()+4));
   area=section("GLIDE",teal,{338,lowerY,180,lowerH});cells=split(area,{1,1,1,1});
   compactKnob("portamento","PORTA",cells[0]);compactKnob("bendRange","BEND",cells[1]);compactKnob("unisonSpread","SPREAD",cells[2]);printedToggle("legato","LEGATO",cells[3].withTrimmedTop(18));
   area=section("ARPEGGIO",teal,{524,lowerY,340,lowerH});cells=split(area,{.7f,.8f,2.7f,1, .8f,1,1});
@@ -736,6 +754,7 @@ private:
    g.setColour(ink);g.setFont(face(19.f,true).withExtraKerningFactor(.07f));g.drawFittedText(section.title,bar.reduced(8,0),Justification::centredLeft,1,.8f);
    g.setColour(section.colour);g.fillRect(section.area.withY(section.area.getBottom()-3).withHeight(3));
   }
+  g.setColour(amber);for(const auto& rule:tagRules)g.fillRect(rule);
   g.setColour(ink.withAlpha(.2f));g.drawHorizontalLine(508,40,584);g.drawHorizontalLine(keysY-9,32,1568);
   g.setColour(dim);g.setFont(face(10.5f));g.drawText("C"+String(octave)+" — C"+String(octave+5),left+88,keysY+96,84,16,Justification::centred);
   g.setColour(Colour(0xff020303));g.fillRect(left+186,keysY,contentW-186,6);
@@ -880,7 +899,7 @@ private:
  }();
  Orbit& orbit; OrbitSkin skin; OrbitLook look; Surface surface; PianoKeyboard keyboard;
  std::vector<Section> sections; std::vector<std::pair<Component*, int>> paged;
- OwnedArray<PanelChoice> panelChoices; OwnedArray<Label> labels; OwnedArray<Fader> faders; OwnedArray<Toggle> toggles; OwnedArray<ChoiceButtons> choices; OwnedArray<WaveKnob> waveKnobs; OwnedArray<SlideSwitch> switches; OwnedArray<ChoiceMenuButton> menuButtons; Slider* delayTimeKnob = nullptr;
+ std::vector<Rectangle<float>> tagRules; OwnedArray<PanelChoice> panelChoices; OwnedArray<Label> labels; OwnedArray<Fader> faders; OwnedArray<Toggle> toggles; OwnedArray<ChoiceButtons> choices; OwnedArray<WaveKnob> waveKnobs; OwnedArray<SlideSwitch> switches; OwnedArray<ChoiceMenuButton> menuButtons; Slider* delayTimeKnob = nullptr;
  struct Sync { std::unique_ptr<SyncKey> key; std::unique_ptr<SyncKnob> knob; Slider* free = nullptr; Label* value = nullptr; const char* id = ""; bool wasSynced = true; };
  OwnedArray<Sync> syncs;
  OwnedArray<TextButton> bankButtons, patchButtons;
