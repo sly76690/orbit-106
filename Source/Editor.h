@@ -671,11 +671,16 @@ private:
   auto routing=section("ROUTING",amber,{1164,row2Y,200,row2H});chipChoice("filterRoute","",{"A","B","A>B","B>A","PAR"},routing.withHeight(65));
   caption("PRESSURE",routing.withTrimmedTop(80).withHeight(15),-1,12);
   cells=split(routing.withTrimmedTop(100),{1,1,1,1});compactKnob("atFilter","FILTER",cells[0]);compactKnob("atVolume","AMP",cells[1]);compactKnob("atLfo","LFO",cells[2]);compactKnob("atDrive","DRIVE",cells[3]);
-  // EFFECTS: the chorus (mode and MIX), the PHASER after it, and the two drives (PRE on the voices, POST on the output).
-  auto fx=section("EFFECTS",teal,{1370,row2Y,198,row2H});chipChoice("chorusMode","CHORUS",{"OFF","I","II","I+II"},fx.withHeight(58));
-  cells=split(fx.withTrimmedTop(62).withHeight(58),{1,1,1,1});compactKnob("chorus","CH MIX",cells[0]);
-  caption("PHASER",cells[1].withHeight(14),-1,11.f);printedToggle("phaserOn","",cells[1].withTrimmedTop(16));compactKnob("phaserRate","RATE",cells[2]);compactKnob("phaserDepth","DEPTH",cells[3]);
-  cells=split(fx.withTrimmedTop(124).withHeight(58),{1,1,1,1});compactKnob("phaserFeedback","FDBK",cells[0]);compactKnob("phaserMix","PH MIX",cells[1]);compactKnob("voiceDrive","PRE",cells[2]);compactKnob("fxDrive","POST",cells[3]);
+  // EFFECTS, in three bands: CHORUS (mode and MIX) on a tinted well, PHASER on its own well, then the two drives.
+  auto fx=section("EFFECTS",teal,{1370,row2Y,198,row2H});const int quarter=fx.getWidth()*3/4;
+  wells.push_back({fx.withHeight(62).expanded(4,0),teal.withAlpha(.22f)});
+  chipChoice("chorusMode","CHORUS",{"OFF","I","II","I+II"},fx.withHeight(58).withWidth(quarter));compactKnob("chorus","MIX",fx.withHeight(58).withTrimmedLeft(quarter));
+  wells.push_back({fx.withTrimmedTop(65).withHeight(62).expanded(4,0),orbitui::ink.withAlpha(.06f)});
+  cells=split(fx.withTrimmedTop(67).withHeight(58),{1,.95f,1.15f,1,.9f});
+  caption("PHASER",cells[0].withHeight(14),-1,11.f);labels.getLast()->setFont(orbitui::face(14.f)); // condensed, like the switch legends: the band is narrow
+  printedToggle("phaserOn","",cells[0].withTrimmedTop(16));
+  compactKnob("phaserRate","RATE",cells[1]);compactKnob("phaserDepth","DEPTH",cells[2]);compactKnob("phaserFeedback","FDBK",cells[3]);compactKnob("phaserMix","MIX",cells[4]);
+  cells=split(fx.withTrimmedTop(130).withHeight(58),{1,1});compactKnob("voiceDrive","PRE DRIVE",cells[0]);compactKnob("fxDrive","POST DRIVE",cells[1]);
  }
  void buildLowerRow(){
   using namespace orbitui;
@@ -749,6 +754,7 @@ private:
   Rectangle<float> window(510,22,344,70);g.setColour(Colour(0xff020303));g.fillRoundedRectangle(window,3);g.setColour(Colour(0xff36382f));g.drawRoundedRectangle(window,3,1);
   g.setColour(led);g.setFont(mono(11.f));g.drawText(displayLine,522,29,320,20,Justification::centredLeft);
   g.setColour(dim);g.setFont(face(12.f));g.drawText("BANK",876,19,118,14,Justification::centred);g.drawText("PATCH",1024,19,307,14,Justification::centred);
+  for(const auto& [area,colour]:wells){g.setColour(colour);g.fillRoundedRectangle(area.toFloat(),4.f);} // groups inside a section (EFFECTS: chorus, phaser)
   for(const auto& section:sections){
    if(section.page>=0&&section.page!=page)continue;
    g.setColour(ink.withAlpha(.28f));g.drawRect(section.area,1);
@@ -900,7 +906,7 @@ private:
   return tile;
  }();
  Orbit& orbit; OrbitSkin skin; OrbitLook look; Surface surface; PianoKeyboard keyboard;
- std::vector<Section> sections; std::vector<std::pair<Component*, int>> paged;
+ std::vector<std::pair<Rectangle<int>,Colour>> wells;std::vector<Section> sections; std::vector<std::pair<Component*, int>> paged;
  std::vector<Rectangle<float>> tagRules; OwnedArray<PanelChoice> panelChoices; OwnedArray<Label> labels; OwnedArray<Fader> faders; OwnedArray<Toggle> toggles; OwnedArray<ChoiceButtons> choices; OwnedArray<WaveKnob> waveKnobs; OwnedArray<SlideSwitch> switches; OwnedArray<ChoiceMenuButton> menuButtons; Slider* delayTimeKnob = nullptr;
  struct Sync { std::unique_ptr<SyncKey> key; std::unique_ptr<SyncKnob> knob; Slider* free = nullptr; Label* value = nullptr; const char* id = ""; bool wasSynced = true; };
  OwnedArray<Sync> syncs;
