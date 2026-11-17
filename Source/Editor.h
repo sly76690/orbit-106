@@ -671,9 +671,11 @@ private:
   auto routing=section("ROUTING",amber,{1164,row2Y,200,row2H});chipChoice("filterRoute","",{"A","B","A>B","B>A","PAR"},routing.withHeight(65));
   caption("PRESSURE",routing.withTrimmedTop(80).withHeight(15),-1,12);
   cells=split(routing.withTrimmedTop(100),{1,1,1,1});compactKnob("atFilter","FILTER",cells[0]);compactKnob("atVolume","AMP",cells[1]);compactKnob("atLfo","LFO",cells[2]);compactKnob("atDrive","DRIVE",cells[3]);
-  auto chorus=section("CHORUS",teal,{1370,row2Y,198,row2H});chipChoice("chorusMode","",{"OFF","I","II","I+II"},chorus.withHeight(65));
-  caption("DRIVE",chorus.withTrimmedTop(80).withTrimmedLeft(60).withHeight(15),-1,12);
-  cells=split(chorus.withTrimmedTop(100),{1,1,1});compactKnob("chorus","MIX",cells[0]);compactKnob("voiceDrive","PRE",cells[1]);compactKnob("fxDrive","POST",cells[2]);
+  // EFFECTS: the chorus (mode and MIX), the PHASER after it, and the two drives (PRE on the voices, POST on the output).
+  auto fx=section("EFFECTS",teal,{1370,row2Y,198,row2H});chipChoice("chorusMode","CHORUS",{"OFF","I","II","I+II"},fx.withHeight(58));
+  cells=split(fx.withTrimmedTop(62).withHeight(58),{1,1,1,1});compactKnob("chorus","CH MIX",cells[0]);
+  caption("PHASER",cells[1].withHeight(14),-1,11.f);printedToggle("phaserOn","",cells[1].withTrimmedTop(16));compactKnob("phaserRate","RATE",cells[2]);compactKnob("phaserDepth","DEPTH",cells[3]);
+  cells=split(fx.withTrimmedTop(124).withHeight(58),{1,1,1,1});compactKnob("phaserFeedback","FDBK",cells[0]);compactKnob("phaserMix","PH MIX",cells[1]);compactKnob("voiceDrive","PRE",cells[2]);compactKnob("fxDrive","POST",cells[3]);
  }
  void buildLowerRow(){
   using namespace orbitui;

@@ -59,7 +59,8 @@ public:
    "arpOn","arpSync","arpPattern","arpDivision","arpOctaves","arpTempo","arpGate","delayOn",      // ARPEGGIO
    "delayTime","delaySync","delayFeedback","delayMod","delayMix","reverbOn","reverbType","reverbSize", // DELAY, REVERB
    "reverbDamp","reverbColor","reverbMix","lfoManual","lfoTrig","atVolume","atLfo","atDrive",
-   "osc2Tune","oscSync","vco2Low","vcoPwm"};                                        // REVERB, EXPRESSION
+   "osc2Tune","oscSync","vco2Low","vcoPwm",
+   "phaserOn","phaserRate","phaserDepth","phaserFeedback","phaserMix"};                         // PHASER                                        // REVERB, EXPRESSION
   // Short names for the host and controller displays (Push shows about a dozen characters).
   static String label(const String& id,const String& longName){
    static const std::map<String,String> names{
@@ -70,7 +71,7 @@ public:
     {"fattack","Flt Attack"},{"fdecay","Flt Decay"},{"fsustain","Flt Sustain"},{"frelease","Flt Release"},{"envLink","Flt Env Src"},{"envInvert","A Env Pol"},{"envPitch","Env>Pitch"},{"pwmSource","PWM Source"},
     {"rate","LFO Rate"},{"lfoDelay","LFO Delay"},{"lfoShape","LFO Wave"},{"lfoPitch","LFO Pitch"},{"wheelDepth","Wheel Vib"},{"bendRange","Bend Range"},{"bendFilter","Bend>Filter"},{"unisonSpread","Uni Spread"},
     {"filterBType","B Model"},{"cutoffB","B Freq"},{"resonanceB","B Reso"},{"envB","B Env"},{"slopeB","B Slope"},{"filterRoute","Routing"},{"filterBlend","A/B Mix"},{"voiceDrive","Drive Pre"},
-    {"mode","Voices"},{"voiceMode","Assign"},{"age","Age"},{"voiceWidth","Width"},{"hold","Hold"},{"chorusMode","Chorus"},{"chorus","Chorus Mix"},{"gain","Volume"},
+    {"mode","Voices"},{"voiceMode","Assign"},{"age","Age"},{"voiceWidth","Width"},{"hold","Hold"},{"chorusMode","Chorus"},{"chorus","Chorus Mix"},{"phaserOn","Phaser On"},{"phaserRate","Ph Rate"},{"phaserDepth","Ph Depth"},{"phaserFeedback","Ph Fdbk"},{"phaserMix","Ph Mix"},{"gain","Volume"},
     {"arpOn","Arp On"},{"arpSync","Arp Sync"},{"arpPattern","Arp Mode"},{"arpDivision","Arp Step"},{"arpOctaves","Arp Range"},{"arpTempo","Arp Tempo"},{"arpGate","Arp Gate"},{"fxDrive","Drive Post"},
     {"delayTime","Dly Time"},{"delaySync","Dly Sync"},{"delayFeedback","Dly Fdbk"},{"delayMod","Dly Mod"},{"delayMix","Dly Level"},{"reverbType","Rev Type"},{"reverbSize","Rev Size"},{"reverbDamp","Rev Damp"},
     {"reverbColor","Rev Color"},{"reverbMix","Rev Level"},{"velFilter","Vel>Filter"},{"atFilter","Press>Filt"},{"delayOn","Dly On"},{"reverbOn","Rev On"},{"lfoSync","LFO Sync"},{"lfoKeyTrig","LFO KeyTrig"},{"envLfoTrig","Env LFO Trig"},{"wheelFilter","Wheel>Filt"},{"lfoManual","LFO Manual"},{"atVolume","Press>Vol"},{"atLfo","Press>LFO"},{"atDrive","Press>Drive"},{"lfoTrig","LFO Trig"},{"masterTune","Master Tune"}};
@@ -123,6 +124,9 @@ public:
   add("reverbSize","Reverb size",0,1,0.5f);add("reverbDamp","Reverb damping",0,1,0.5f);add("reverbMix","Reverb mix",0,0.65f,0);add("reverbColor","Reverb color",0,1,0.4f);
   add("oscLayer","Jupiter source mix",0,1,.5f);
   add("jupiterMix","Juno / Jupiter mix",0,1,0);add("vco1Width","VCO 1 pulse width",.08f,.92f,.5f);add("vcoPwm","VCO PWM depth",0,1,0);
+  // PHASER (after the chorus), off by default: older patches and sessions sound as before.
+  keep(std::make_unique<AudioParameterBool>(ParameterID{"phaserOn",1},label("phaserOn","Phaser on"),false));
+  add("phaserRate","Phaser rate (Hz)",.05f,5,.35f,.4f);add("phaserDepth","Phaser depth",0,1,.6f);add("phaserFeedback","Phaser feedback",0,.85f,.45f);add("phaserMix","Phaser mix",0,1,.5f);
   keep(std::make_unique<AudioParameterBool>(ParameterID{"vco2Low",1},label("vco2Low","VCO 2 low frequency"),false));
   keep(std::make_unique<AudioParameterBool>(ParameterID{"envLink",1},label("envLink","Link filter to amp envelope"),true));
   auto choice=[&](const char* id,const char* name,StringArray values,int initial=0){keep(std::make_unique<AudioParameterChoice>(ParameterID{id,1},label(id,name),values,initial));};
@@ -228,10 +232,10 @@ public:
   sampleRate=sr;echo.prepare(sr);reverb.prepare(sr);
   voices8.setCurrentPlaybackSampleRate(sr); for(int i=0;i<voices8.getNumVoices();++i) static_cast<Voice*>(voices8.getVoice(i))->prepare(sr);
   voices6.setCurrentPlaybackSampleRate(sr); for(int i=0;i<voices6.getNumVoices();++i) static_cast<Voice*>(voices6.getVoice(i))->prepare(sr);
-  ignoreUnused(block);chorus.prepare(sr);
+  ignoreUnused(block);chorus.prepare(sr);phaser.prepare({sr,uint32(blockCapacity),2});phaser.reset();
   gain.reset(sr,0.02);gain.setCurrentAndTargetValue(state.getRawParameterValue("gain")->load());
  }
- void releaseResources() override {voices8.allNotesOff(0,false);voices6.allNotesOff(0,false);chorus.reset();keyboard.reset();arp.reset();hold.reset();echo.reset();reverb.reset();previousSix=previousEight=0;}
+ void releaseResources() override {voices8.allNotesOff(0,false);voices6.allNotesOff(0,false);chorus.reset();phaser.reset();keyboard.reset();arp.reset();hold.reset();echo.reset();reverb.reset();previousSix=previousEight=0;}
  bool isBusesLayoutSupported(const BusesLayout& b) const override {return b.getMainOutputChannelSet()==AudioChannelSet::stereo();}
  // A block larger than prepared is played in pieces of the prepared size: nothing is ever allocated while playing.
  void processBlock(AudioBuffer<float>& buffer,MidiBuffer& midi) override {
@@ -275,6 +279,10 @@ public:
   {auto& other=mode==0?voices8:voices6;bool ringing=false;for(int i=0;i<other.getNumVoices()&&!ringing;++i)ringing=other.getVoice(i)->isVoiceActive();
    if(ringing){silence.clear();other.renderNextBlock(buffer,silence,0,buffer.getNumSamples());}}
   chorus.process(buffer,int(value("chorusMode")),value("chorus"));
+  // PHASER: always running, its mix brought to zero (smoothly) when it is off, so switching it never clicks.
+  if(buffer.getNumChannels()>=2){phaser.setRate(value("phaserRate"));phaser.setDepth(value("phaserDepth"));phaser.setFeedback(value("phaserFeedback"));
+   phaser.setCentreFrequency(900.f);phaser.setMix(value("phaserOn")>.5f?value("phaserMix"):0.f);
+   dsp::AudioBlock<float> block(buffer.getArrayOfWritePointers(),2,size_t(buffer.getNumSamples()));phaser.process(dsp::ProcessContextReplacing<float>(block));}
   // Drive, then the echo.
   // POST drive at twice the sample rate, for the same reason as the voices: its overtones are filtered out, not folded back.
   if(const float drive=value("fxDrive");drive>0&&buffer.getNumChannels()>=2){
@@ -369,7 +377,7 @@ private:
  std::atomic<int> currentProgram{0};
  GlideMemory previousSix,previousEight;double sampleRate=44100;Arpeggiator arp;CharacterDelay echo;OrbitReverb reverb;NoteHold hold;
  int blockCapacity=8192;MidiBuffer chunkMidi,silence;
- VoiceAllocator voices8,voices6;EnsembleChorus chorus;dsp::Oversampling<float> drivePass{2,1,dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,true,false};int driveBlock=512;SmoothedValue<float> gain;int lastMode=-1;
+ VoiceAllocator voices8,voices6;EnsembleChorus chorus;dsp::Phaser<float> phaser;dsp::Oversampling<float> drivePass{2,1,dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,true,false};int driveBlock=512;SmoothedValue<float> gain;int lastMode=-1;
 };
 #include "Editor.h"
 AudioProcessorEditor* Orbit::createEditor(){return new Editor(*this);}

@@ -9,9 +9,11 @@ static juce::AudioProcessorParameter* parameterOf(juce::AudioProcessor& p,const 
 #include "OscillatorArchitecture.h"
 #include "CinemaBank.h"
 #include "EngineFixes.h"
+#include "Phaser.h"
 int main() {
  juce::ScopedJuceInitialiser_GUI gui;
  if (!engineFixTests()) return 109;
+ if (!phaserTests()) return 110;
  if (!auditRegression()) return 100;
  if (!oscillatorArchitecture()) return 101;
  if (!cinemaBankTests()) return 102;
@@ -140,7 +142,7 @@ int main() {
  std::cout<<"PASS state restore\n";
  // Host pages: the panel order for controllers such as Push, every parameter present once, short names.
  {auto* first=dynamic_cast<juce::RangedAudioParameter*>(p->getParameters()[0]);auto* ninth=dynamic_cast<juce::RangedAudioParameter*>(p->getParameters()[8]);
-  if(!first||first->paramID!="wave"||!ninth||ninth->paramID!="osc1Shape"||p->getParameters().size()!=100)return 74;
+  if(!first||first->paramID!="wave"||!ninth||ninth->paramID!="osc1Shape"||p->getParameters().size()!=105)return 74;
   for(auto* b:p->getParameters())if(b->getName(100).length()>12){std::cerr<<"Parameter name too long for a controller: "<<b->getName(100)<<"\n";return 75;}}
  std::cout<<"PASS host pages of eight with short names\n";
  p->setRateAndBufferSizeDetails(48000,256);p->prepareToPlay(48000,256);

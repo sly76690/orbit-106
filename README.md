@@ -33,7 +33,7 @@ Double-clic sur un fader ou un potard : retour à la valeur par défaut. Survol 
 - **HOLD** : les notes tiennent après relâchement ; un nouvel accord remplace l'ancien.
 - **Arpège** : UP, DOWN, U&D, RND ; 1 à 3 octaves ; pas 1/4, 1/8, 1/16, 1/32. Avec SYNC et le DAW en lecture, les pas se calent sur la grille du projet.
 - **Chorus d'ensemble** : OFF, I, II, I+II. Deux têtes de lecture balayées en opposition sur une ligne à retard courte.
-- **Effets** : drive, delay (TIME libre jusqu'à 1,5 s ; en SYNC, la valeur de note choisie est jouée exactement jusqu'à 4 s, soit une blanche jusqu'à 30 BPM), réverbe VINT (hall profond et modulé), PLATE ou SPACE (très grand espace, halo à l'octave en option).
+- **Effets** : chorus (OFF / I / II / I+II), **phaser** (ON, RATE, DEPTH, FDBK, PH MIX, après le chorus ; éteint par défaut, les anciens sons ne changent pas), drive PRE (voix) et POST (sortie), delay (TIME libre jusqu'à 1,5 s ; en SYNC, la valeur de note choisie est jouée exactement jusqu'à 4 s, soit une blanche jusqu'à 30 BPM), réverbe VINT (hall profond et modulé), PLATE ou SPACE (très grand espace, halo à l'octave en option).
 
 ## Midnight Signals
 
