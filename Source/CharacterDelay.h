@@ -14,7 +14,7 @@ class CharacterDelay {
 public:
  void prepare(double sampleRate) {
   sr = float(sampleRate);
-  left.prepare(int(1.7 * sampleRate) + 64); right.prepare(int(1.7 * sampleRate) + 64);
+  left.prepare(int(4.1 * sampleRate) + 64); right.prepare(int(4.1 * sampleRate) + 64);
   highPass = coefficient(loopHighPassHz); lowPass = coefficient(brightHz);
   time.reset(sampleRate, .3); time.setCurrentAndTargetValue(.3f * sr); depth.reset(sampleRate, .1); depth.setCurrentAndTargetValue(0.f);
   wet.reset(sampleRate, .02);
@@ -23,7 +23,7 @@ public:
  void reset() { wet.setCurrentAndTargetValue(0.f); left.clear(); right.clear(); for (auto* state : {&a1, &a2, &b1, &b2, &hpL, &hpR}) *state = 0; phase = 0; wow = 0; }
  void process(juce::AudioBuffer<float>& buffer, float seconds, float feedback, float mix, float modulation) {
   if (buffer.getNumChannels() < 2) return;
-  seconds = juce::jlimit(.01f, 1.6f, seconds); modulation = juce::jlimit(0.f, 1.f, modulation);
+  seconds = juce::jlimit(.01f, 4.f, seconds); modulation = juce::jlimit(0.f, 1.f, modulation);
   wet.setTargetValue(juce::jlimit(0.f, 1.f, mix));
   time.setTargetValue(seconds * sr); depth.setTargetValue(modDepthMs * .001f * sr * std::sqrt(modulation));
   lowPass = coefficient(brightHz - (brightHz - darkHz) * juce::jlimit(0.f, 1.f, (seconds - .03f) / .5f));

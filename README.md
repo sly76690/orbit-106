@@ -31,9 +31,9 @@ Double-clic sur un fader ou un potard : retour à la valeur par défaut. Survol 
 - **Enveloppes** à courbes (charge et décharge), une pour l'ampli, une pour le filtre. **SOURCE** choisit pour le filtre ses propres faders (OWN) ou une copie de l'ampli (AMP) ; saisir un fader ENV / FILTER bascule sur OWN.
 - **VCA** : ENV, GATE ou enveloppe de filtre.
 - **HOLD** : les notes tiennent après relâchement ; un nouvel accord remplace l'ancien.
-- **Arpège** : UP, DOWN, U&D, RND ; 1 à 3 octaves ; pas 1/4, 1/8, 1/16. Avec SYNC et le DAW en lecture, les pas se calent sur la grille du projet.
+- **Arpège** : UP, DOWN, U&D, RND ; 1 à 3 octaves ; pas 1/4, 1/8, 1/16, 1/32. Avec SYNC et le DAW en lecture, les pas se calent sur la grille du projet.
 - **Chorus d'ensemble** : OFF, I, II, I+II. Deux têtes de lecture balayées en opposition sur une ligne à retard courte.
-- **Effets** : drive, delay, réverbe VINT (hall profond et modulé) ou PLATE.
+- **Effets** : drive, delay (TIME libre jusqu'à 1,5 s ; en SYNC, la valeur de note choisie est jouée exactement jusqu'à 4 s, soit une blanche jusqu'à 30 BPM), réverbe VINT (hall profond et modulé), PLATE ou SPACE (très grand espace, halo à l'octave en option).
 
 ## Midnight Signals
 
@@ -45,7 +45,7 @@ Banque additionnelle intégrée : **16 nouveaux presets**, quatre pads, quatre b
 
 **Version d’état 5 :** nouvelle architecture d’oscillateurs. Les anciens fichiers restent chargeables, mais leur son n’est pas conservé. Les 24 patches intégrés sont des points de départ ; la banque de 20 sons sur disque reste à refaire.
 
-Les presets personnels (`.orbitpreset`) sont enregistrés dans `~/Library/Application Support/SF Instruments/Orbit 106/Presets/User`. Nom de 1 à 64 caractères : lettres sans accents, chiffres, espaces, tirets, underscores. Un nom existant n'est jamais écrasé. Les réglages sont aussi sauvegardés dans la session du DAW ; les sessions et presets des versions précédentes sont convertis au chargement.
+Les presets personnels (`.orbitpreset`) sont enregistrés dans `~/Library/Application Support/SF Instruments/Orbit 106/Presets/User`. Nom de 1 à 64 caractères : lettres sans accents, chiffres, espaces, tirets, underscores. Un nom déjà pris n'est remplacé qu'après confirmation (« Remplacer le preset ? »). Les réglages sont aussi sauvegardés dans la session du DAW ; les sessions et presets des versions précédentes sont convertis au chargement.
 
 ## Clavier de l'ordinateur (standalone)
 
@@ -78,3 +78,10 @@ Compilation Apple Silicon arm64. Pas de signature Developer ID ni de notarisatio
 | `Source/EnsembleChorus.h`, `Source/Reverbs.h` | chorus et réverbes |
 | `Source/Editor.h` | façade |
 | `Tests/Smoke.cpp`, `Tests/OscillatorArchitecture.h`, `Tests/AuditRegression.h` | tests audio, architecture, régressions et rendu de la façade |
+
+## Corrections moteur (17 novembre 2026)
+
+- Un bloc audio plus grand que prévu par le DAW est joué en morceaux : aucune allocation de mémoire pendant la lecture.
+- Passer de 6 à 8 voix (ou l'inverse) laisse les notes en cours finir sur leur release au lieu de les couper.
+- Delay synchronisé : la valeur de note choisie est jouée exactement jusqu'à 4 s (ligne de retard allongée).
+- Tests : `Tests/EngineFixes.h`.
