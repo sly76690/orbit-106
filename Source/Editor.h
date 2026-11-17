@@ -691,7 +691,7 @@ private:
   caption({},cells[0].withTrimmedTop(63).withHeight(12),-1,9);labels.getLast()->getProperties().set("live",true);
   addSync("delaySync",6,*delayTimeKnob,cells[5].withTrimmedTop(18).withHeight(45),-1,labels.getLast());
   area=section("REVERB",teal,{1106,lowerY,300,lowerH});cells=split(area,{2.3f,1,1,1,1,.8f});
-  chipChoice("reverbType","",{"VINT","PLATE","SPACE"},cells[0].withHeight(65));compactKnob("reverbSize","SIZE",cells[1]);compactKnob("reverbDamp","DAMP",cells[2]);compactKnob("reverbColor","COLOR",cells[3]);compactKnob("reverbMix","LEVEL",cells[4]);printedToggle("reverbOn","ON",cells[5].withTrimmedTop(18));
+  chipChoice("reverbType","",{"VINT","PLATE","SPACE"},cells[0].withHeight(65));compactKnob("reverbSize","SIZE",cells[1]);compactKnob("reverbDamp","DAMP",cells[2]);compactKnob("reverbColor","TONE",cells[3]); /* TONE: COLOR ran into LEVEL */compactKnob("reverbMix","LEVEL",cells[4]);printedToggle("reverbOn","ON",cells[5].withTrimmedTop(18));
   area=section("OUTPUT",teal,{1412,lowerY,156,lowerH});cells=split(area,{1,1});compactKnob("gain","VOLUME",cells[0]);compactKnob("masterTune","TUNE",cells[1]);
  }
 
