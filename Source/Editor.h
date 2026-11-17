@@ -676,6 +676,7 @@ private:
   wells.push_back({fx.withHeight(62).expanded(4,0),teal.withAlpha(.22f)});
   chipChoice("chorusMode","CHORUS",{"OFF","I","II","I+II"},fx.withHeight(58).withWidth(quarter));compactKnob("chorus","MIX",fx.withHeight(58).withTrimmedLeft(quarter));
   wells.push_back({fx.withTrimmedTop(65).withHeight(62).expanded(4,0),orbitui::ink.withAlpha(.06f)});
+  wells.push_back({fx.withTrimmedTop(130).withHeight(55).expanded(4,0),orbitui::amber.withAlpha(.16f)}); // DRIVE: warm well
   cells=split(fx.withTrimmedTop(67).withHeight(58),{1,.95f,1.15f,1,.9f});
   caption("PHASER",cells[0].withHeight(14),-1,11.f);labels.getLast()->setFont(orbitui::face(14.f)); // condensed, like the switch legends: the band is narrow
   printedToggle("phaserOn","",cells[0].withTrimmedTop(16));
