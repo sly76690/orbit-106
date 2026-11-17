@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Orbit106 VERSION 0.1.0 LANGUAGES C CXX)
+project(Orbit106 VERSION 0.1.1 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS")
 add_subdirectory(vendor/JUCE-8.0.6 EXCLUDE_FROM_ALL)
