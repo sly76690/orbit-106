@@ -60,8 +60,11 @@ public:
  std::array<Image,3> indexSprite{ImageCache::getFromMemory(BinaryData::index_amber_png,BinaryData::index_amber_pngSize),
   ImageCache::getFromMemory(BinaryData::index_teal_png,BinaryData::index_teal_pngSize),ImageCache::getFromMemory(BinaryData::index_neutral_png,BinaryData::index_neutral_pngSize)};
  const Image& indexFor(Colour colour) const {return colour==orbitui::amber?indexSprite[0]:(colour==orbitui::teal?indexSprite[1]:indexSprite[2]);}
- void drawLed(Graphics& g,Rectangle<float> spot,bool on) const {
+ void drawLed(Graphics& g,Rectangle<float> spot,bool on,bool blue=false) const {
   const auto centre=spot.getCentre();
+  if(on&&blue){ // OVERDUB: a blue LED
+   for(int i=4;i>=1;--i){g.setColour(Colour(0xff3fa9ff).withAlpha(.09f));g.fillEllipse(Rectangle<float>(5.f+float(i)*3.f,5.f+float(i)*3.f).withCentre(centre));}
+   g.setColour(Colour(0xff6cc4ff));g.fillEllipse(Rectangle<float>(5.5f,5.5f).withCentre(centre));g.setColour(Colours::white.withAlpha(.7f));g.fillEllipse(Rectangle<float>(2.f,2.f).withCentre(centre.translated(-.6f,-.6f)));return;}
   if(on&&ledSprite.isValid()){g.drawImage(ledSprite,Rectangle<float>(26.f,26.f).withCentre(centre));return;}
   const auto dome=Rectangle<float>(5.f,5.f).withCentre(centre);
   g.setColour(Colour(0xff050505));g.fillEllipse(dome.expanded(1.f));g.setColour(Colour(0xff3a120c));g.fillEllipse(dome);
@@ -80,7 +83,8 @@ public:
    g.setGradientFill(rocker);g.fillRect(cap.reduced(1));g.setColour(Colours::white.withAlpha(over?.25f:.12f));g.drawRect(cap.reduced(1),.7f);return;
   }
   const bool lit=button.getToggleState()||down;
-  if(button.getProperties().contains("legendAbove")){area.removeFromTop(16);drawLed(g,area.removeFromTop(9),lit);}
+  const bool blue=button.getProperties().contains("ledBlue");
+  if(button.getProperties().contains("legendAbove")){area.removeFromTop(16);drawLed(g,area.removeFromTop(9),lit,blue);}
   else if(const int mode=ledMode(button);mode!=0)drawLed(g,mode==1?area.removeFromTop(12):area.removeFromLeft(12),lit);
   const auto cap=area.reduced(1.5f).withTrimmedBottom(2).translated(0,down?1.f:0.f);
   const bool cream=button.getProperties().contains("cream");
@@ -411,7 +415,8 @@ private:
 class Editor : public AudioProcessorEditor, private Timer {
  using APVTS = AudioProcessorValueTreeState;
  enum { designW = 1600, designH = 1000, left = 32, contentW = 1536, gap = 12 };
- enum { cheek = 26, frameW = designW + 2 * cheek }; // wide wooden end cheeks around the design surface
+ enum { cheek = 26, frameW = designW + 2 * cheek };
+ enum { outputW = 116, keysW = 1536 - 186 - outputW - 8 }; // the keyboard leaves room for OUTPUT on its right // wide wooden end cheeks around the design surface
  enum { headerY = 4, lineY = 104, panelY = 120, panelH = 242, row2Y = 382, row2H = 224, lowerY = 624, lowerH = 120, keysY = 764, keysH = 218 }; // Space below effects separates the keyboard from the editing surface.
  struct Section { String title; Colour colour; Rectangle<int> area; int page; };
  struct Fader { Slider slider; String id; bool followsLink = false; std::unique_ptr<APVTS::SliderAttachment> attachment; };
@@ -692,17 +697,48 @@ private:
   compactKnob("age","AGE",cells[2]);compactKnob("voiceWidth","WIDTH",cells[3]);chipChoice("vcaMode","VCA",{"ENV","GATE","F.ENV"},cells[4].withHeight(79),true);switches.getLast()->setLever();printedToggle("hold","HOLD",cells[5].withTrimmedTop(18).expanded(6,0).withRight(area.getRight()+4));
   area=section("GLIDE",teal,{338,lowerY,180,lowerH});cells=split(area,{1,1,1,1});
   compactKnob("portamento","PORTA",cells[0]);compactKnob("bendRange","BEND",cells[1]);compactKnob("unisonSpread","SPREAD",cells[2]);printedToggle("legato","LEGATO",cells[3].withTrimmedTop(18));
-  area=section("ARPEGGIO",teal,{524,lowerY,340,lowerH});cells=split(area,{.7f,.8f,2.7f,1, .8f,1,1});
-  printedToggle("arpOn","ON",cells[0].withTrimmedTop(18));printedToggle("arpSync","SYNC",cells[1].withTrimmedTop(18));chipChoice("arpPattern","",{"UP","DOWN","U&D","RND"},cells[2].withHeight(65));
+  /* ARPEGGIO, narrower so the SEQUENCER fits beside it: the pattern is now a MODE menu. */
+  area=section("ARPEGGIO",teal,{524,lowerY,300,lowerH});cells=split(area,{.75f,.85f,1.15f,1.f,1.f,1.f,1.f});
+  printedToggle("arpOn","ON",cells[0].withTrimmedTop(18));printedToggle("arpSync","SYNC",cells[1].withTrimmedTop(18));menuChoice("arpPattern","MODE",cells[2]);
   menuChoice("arpDivision","STEP",cells[3]);menuChoice("arpOctaves","OCT",cells[4]);compactKnob("arpTempo","TEMPO",cells[5]);compactKnob("arpGate","GATE",cells[6]);
-  area=section("DELAY",teal,{870,lowerY,230,lowerH});cells=split(area,{1,1,1,1,.75f,.9f});
+  // SEQUENCER keys: REC, then play one note or chord per step (REST for a silent step); PLAY, then hold a key to transpose.
+  // SEQUENCER: its own section, on the arpeggio clock (TEMPO, STEP, GATE, SYNC).
+  area=section("SEQUENCER",teal,{830,lowerY,250,lowerH});cells=split(area,{1.f,1.f,1.f,1.1f,1.5f}); // EDIT and MEMORY apart
+  // REC works like a looper pedal: REC (red) records a new sequence; pressed again, OVD (blue): the recording ends, the
+  // sequence plays and what you play joins it; pressed again, overdub ends and the sequence keeps playing.
+  printedToggle("seqRec","REC",cells[0].withTrimmedTop(18));recKey=&toggles.getLast()->button;toggles.getLast()->attachment.reset();
+  recKey->setClickingTogglesState(false);recKey->onClick=[this]{
+   auto setParam=[this](const char* id,bool on){auto* p=orbit.state.getParameter(id);p->beginChangeGesture();p->setValueNotifyingHost(on?1.f:0.f);p->endChangeGesture();};
+   const bool rec=orbit.state.getRawParameterValue("seqRec")->load()>.5f,ovd=orbit.state.getRawParameterValue("seqOvd")->load()>.5f;
+   const bool play=orbit.state.getRawParameterValue("seqPlay")->load()>.5f;
+   if(ovd)setParam("seqOvd",false);
+   else if(rec){setParam("seqRec",false);setParam("seqPlay",true);setParam("seqOvd",true);}
+   else if(play)setParam("seqOvd",true); // REC while the sequence plays: live recording, quantized to the steps
+   else{setParam("seqPlay",false);setParam("seqRec",true);}};printedToggle("seqRest","REST",cells[1].withTrimmedTop(18));printedToggle("seqPlay","PLAY",cells[2].withTrimmedTop(18));
+  restKey=&toggles[toggles.size()-2]->button;restKey->setClickingTogglesState(false); // REST is a momentary key
+  // MEMORY: load one of the eight stored sequences, or store the current one, from a menu.
+  // EDIT opens the step grid over the panel (the keyboard stays in view for playing the notes in).
+  caption("EDIT",cells[3].withHeight(14),-1,11.f);seqEditKey.setClickingTogglesState(true);seqEditKey.getProperties().set("parameterId",String());
+  place(seqEditKey,cells[3].withTrimmedTop(26).withSizeKeepingCentre(jmin(cells[3].getWidth()-6,40),26),-1);seqEditKey.onClick=[this]{showSequenceEditor(seqEditKey.getToggleState());};
+  surface.addChildComponent(sequenceEditor);sequenceEditor.setBounds(32,row2Y,contentW,lowerY+lowerH-row2Y);sequenceEditor.onClose=[this]{seqEditKey.setToggleState(false,sendNotificationSync);};
+  caption("MEMORY",cells[4].withHeight(14),-1,11.f);
+  seqMemory.getProperties().set("liveText",true);place(seqMemory,{cells[4].getX(),cells[4].getY()+19,cells[4].getWidth(),28},-1);
+  // the step being played or recorded, under MEMORY
+  caption({},{cells[4].getX(),cells[4].getY()+52,cells[4].getWidth(),14},-1,10.f,led);seqStepLabel=labels.getLast();seqStepLabel->setFont(mono(11.f));
+  seqMemory.onClick=[this]{PopupMenu menu;menu.addSectionHeader("LOAD");
+   for(int i=0;i<Orbit::sequenceSlots;++i){const bool used=orbit.sequenceSlotUsed(i);menu.addItem(1+i,"SEQ "+String(i+1)+(used?"   "+String(orbit.sequenceSlotLength(i))+" steps":String("   empty")),used,orbit.sequenceSlot()==i);}
+   menu.addSectionHeader("STORE THE CURRENT SEQUENCE");
+   for(int i=0;i<Orbit::sequenceSlots;++i)menu.addItem(101+i,"SEQ "+String(i+1)+(orbit.sequenceSlotUsed(i)?"   (replace)":String()),orbit.sequenceLength()>0);
+   menu.showMenuAsync(PopupMenu::Options().withTargetComponent(&seqMemory),[safe=Component::SafePointer<Editor>(this)](int result){
+    if(safe==nullptr||result<=0)return;if(result>100)safe->orbit.storeSequence(result-101);else safe->orbit.loadSequence(result-1);});};
+  restKey->onStateChange=[this]{const bool down=restKey->isDown();if(down==restDown)return;restDown=down;auto* p=orbit.state.getParameter("seqRest");p->beginChangeGesture();p->setValueNotifyingHost(down?1.f:0.f);p->endChangeGesture();};
+  area=section("DELAY",teal,{1086,lowerY,210,lowerH});cells=split(area,{1,1,1,1,.75f,.9f});
   compactKnob("delayTime","TIME",cells[0]);delayTimeKnob=&faders.getLast()->slider;
   compactKnob("delayFeedback","FDBK",cells[1]);compactKnob("delayMod","MOD",cells[2]);compactKnob("delayMix","LEVEL",cells[3]);printedToggle("delayOn","ON",cells[4].withTrimmedTop(18));
   caption({},cells[0].withTrimmedTop(63).withHeight(12),-1,9);labels.getLast()->getProperties().set("live",true);
   addSync("delaySync",6,*delayTimeKnob,cells[5].withTrimmedTop(18).withHeight(45),-1,labels.getLast());
-  area=section("REVERB",teal,{1106,lowerY,300,lowerH});cells=split(area,{2.3f,1,1,1,1,.8f});
+  area=section("REVERB",teal,{1302,lowerY,266,lowerH});cells=split(area,{2.f,1,1,1,1,.8f});
   chipChoice("reverbType","",{"VINT","PLATE","SPACE"},cells[0].withHeight(65));compactKnob("reverbSize","SIZE",cells[1]);compactKnob("reverbDamp","DAMP",cells[2]);compactKnob("reverbColor","TONE",cells[3]); /* TONE: COLOR ran into LEVEL */compactKnob("reverbMix","LEVEL",cells[4]);printedToggle("reverbOn","ON",cells[5].withTrimmedTop(18));
-  area=section("OUTPUT",teal,{1412,lowerY,156,lowerH});cells=split(area,{1,1});compactKnob("gain","VOLUME",cells[0]);compactKnob("masterTune","TUNE",cells[1]);
  }
 
  void buildKeyboard() {
@@ -727,8 +763,11 @@ private:
   pitchWheel.onDragEnd=[this]{pitchWheel.setValue(0,sendNotificationSync);};
   place(pitchWheel,{left+10,keysY+52,62,156},-1);
   lfoTrigButton.getProperties().set("parameterId","lfoTrig");
-  keyboard.setScrollButtonsVisible(false); keyboard.setKeyWidth(float(contentW - 186) / 36.f); keyboard.setOctaveForMiddleC(4); keyboard.setBlackNoteLengthProportion(.62f);
-  place(keyboard, {left + 186, keysY + 6, contentW - 186, keysH - 6}, -1);
+  keyboard.setScrollButtonsVisible(false); keyboard.setKeyWidth(float(keysW) / 36.f); keyboard.setOctaveForMiddleC(4); keyboard.setBlackNoteLengthProportion(.62f);
+  place(keyboard, {left + 186, keysY + 6, keysW, keysH - 6}, -1);
+  // OUTPUT beside the keys (its old place in the lower row went to the SEQUENCER): VOLUME and TUNE, where the hand finds them while playing.
+  auto out=section("OUTPUT",teal,{left+contentW-outputW,keysY,outputW,keysH});
+  addRowKnob("gain","VOLUME",out.withHeight(84));compactKnob("masterTune","TUNE",out.withTrimmedTop(100).withHeight(70));
   // Computer keyboard, AZERTY rows: Q S D F G H J K L M are the white keys starting on C,
   // Z E T Y U O P the black keys above them. OCT - / OCT + move the range.
   keyboard.clearKeyMappings();
@@ -768,7 +807,7 @@ private:
   g.setColour(amber);for(const auto& rule:tagRules)g.fillRect(rule);
   g.setColour(ink.withAlpha(.2f));g.drawHorizontalLine(508,40,584);g.drawHorizontalLine(keysY-9,32,1568);
   g.setColour(dim);g.setFont(face(10.5f));g.drawText("C"+String(octave)+" — C"+String(octave+5),left+88,keysY+96,84,16,Justification::centred);
-  g.setColour(Colour(0xff020303));g.fillRect(left+186,keysY,contentW-186,6);
+  g.setColour(Colour(0xff020303));g.fillRect(left+186,keysY,keysW,6);
 
  }
 
@@ -808,7 +847,7 @@ private:
   DynamicObject::Ptr root = new DynamicObject();
   root->setProperty("width", int(designW)); root->setProperty("height", int(designH)); root->setProperty("left", int(left)); root->setProperty("contentWidth", int(contentW));
   root->setProperty("headerY", int(headerY)); root->setProperty("accentY", int(lineY));
-  root->setProperty("display", var(boxed({564, 10, 290, 56}).get())); root->setProperty("keyboardBlock", var(boxed({left, keysY + 6, 132, keysH - 6}).get())); root->setProperty("keyboard", var(boxed({left + 186, keysY, contentW - 186, keysH}).get()));
+  root->setProperty("display", var(boxed({564, 10, 290, 56}).get())); root->setProperty("keyboardBlock", var(boxed({left, keysY + 6, 132, keysH - 6}).get())); root->setProperty("keyboard", var(boxed({left + 186, keysY, keysW, keysH}).get()));
   Array<var> keyList; // every key of the on-screen keyboard, so that the rendered keys sit exactly under the playable ones
   for (int note = keyboard.getRangeStart(); note <= keyboard.getRangeEnd(); ++note) {
    const auto key = keyboard.getRectangleForKey(note).translated(float(keyboard.getX()), float(keyboard.getY()));
@@ -883,6 +922,19 @@ private:
   const String line = (sound.isNotEmpty() ? (CinematicBank::contains(sound) ? String("MIDNIGHT SIGNALS") : String("SOUND")) : user ? String("USER") : "BANK " + String::charToString(juce_wchar('A' + program / 8)) + " / " + String(program % 8 + 1)) + (eight ? "    8 VOICES" : "    6 VOICES") + (orbit.isPatchModified() ? "    EDITED" : "");
   midiButton.setToggleState(orbit.isLearning(), dontSendNotification);
   String shown = line;
+  const int steps = orbit.sequenceLength();
+  if (orbit.state.getRawParameterValue("seqOvd")->load() > .5f) shown = "SEQ OVERDUB    " + String(steps) + " STEPS    QUANTIZED";
+  else if (orbit.state.getRawParameterValue("seqRec")->load() > .5f) shown = "SEQ REC    STEP " + String(steps + 1) + " / 64    REST = SILENCE";
+  else if (orbit.state.getRawParameterValue("seqPlay")->load() > .5f) shown = (orbit.sequenceSlot() >= 0 ? "SEQ " + String(orbit.sequenceSlot() + 1) : String("SEQ PLAY")) + "    " + String(steps) + " STEPS    KEY = TRANSPOSE";
+  sequenceEditor.refresh();
+  if (recKey != nullptr) { const bool rec = orbit.state.getRawParameterValue("seqRec")->load() > .5f, ovd = orbit.state.getRawParameterValue("seqOvd")->load() > .5f;
+   recKey->setToggleState(rec || ovd, dontSendNotification); recKey->setButtonText(ovd ? "OVD" : "REC");
+   if (ovd != recKey->getProperties().contains("ledBlue")) { if (ovd) recKey->getProperties().set("ledBlue", true); else recKey->getProperties().remove("ledBlue"); recKey->repaint(); } }
+  if (orbit.editStep.load() >= 0) shown = "SEQ EDIT    STEP " + String(orbit.editStep.load() + 1).paddedLeft('0', 2) + " / " + String(steps).paddedLeft('0', 2) + (orbit.editLane.load() ? "    OVD LINE" : "    SEQ LINE");
+  if (seqStepLabel != nullptr) { const bool rec = orbit.state.getRawParameterValue("seqRec")->load() > .5f, play = orbit.state.getRawParameterValue("seqPlay")->load() > .5f;
+   const String text = rec ? "REC " + String(steps + 1).paddedLeft('0', 2) : play && steps > 0 ? String(orbit.sequencePosition() + 1).paddedLeft('0', 2) + "/" + String(steps).paddedLeft('0', 2) : String(steps) + " ST";
+   if (seqStepLabel->getText() != text) seqStepLabel->setText(text, dontSendNotification); }
+  seqMemory.setButtonText(orbit.sequenceSlot() >= 0 ? "SEQ " + String(orbit.sequenceSlot() + 1) : String("SEQ -"));
   if (orbit.isLearning()) { const int touched = orbit.lastTouchedParameter();
    shown = touched < 0 ? String("MIDI LEARN    TOUCH A CONTROL") : "MIDI LEARN    " + orbit.getParameters()[touched]->getName(14).toUpperCase() + "  <  MOVE A CC"; }
   if (shown != displayLine) { displayLine = shown; surface.repaint(510, 22, 344, 30); }
@@ -910,6 +962,61 @@ private:
  }();
  Orbit& orbit; OrbitSkin skin; OrbitLook look; Surface surface; PianoKeyboard keyboard;
  std::vector<std::pair<Rectangle<int>,Colour>> wells;std::vector<Section> sections; std::vector<std::pair<Component*, int>> paged;
+ // SEQUENCE EDIT: the steps as a grid. Click a step (or the + after the last one to add a step), then play a note or
+ // a chord on the keys: it replaces the step (ADD: joins it) and the next step is selected. REST, INSERT, DELETE edit
+ // the selected step. The audio side does the replacing, so the keys are heard while editing.
+ struct SequenceEditor : Component {
+  explicit SequenceEditor(Orbit& o):orbit(o){
+   for(auto* b:{&prev,&next,&add,&rest,&insert,&remove,&clearOvd,&mergeOvd,&done}){addAndMakeVisible(*b);b->setWantsKeyboardFocus(false);b->getProperties().set("fontSize",12.f);}
+   add.setClickingTogglesState(true);setWantsKeyboardFocus(false);
+   prev.onClick=[this]{select(orbit.editStep.load()-1,lane());};next.onClick=[this]{select(orbit.editStep.load()+1,lane());};
+   add.onClick=[this]{orbit.editAdds.store(add.getToggleState());repaint();};
+   rest.onClick=[this]{const int i=orbit.editStep.load();const bool l=lane();orbit.editSequence([i,l](Arpeggiator::Sequence& q){q.clearLane(i,l);});};
+   insert.onClick=[this]{const int i=orbit.editStep.load();orbit.editSequence([i](Arpeggiator::Sequence& q){q.insertAfter(i);});select(i+1,lane());};
+   remove.onClick=[this]{const int i=orbit.editStep.load();orbit.editSequence([i](Arpeggiator::Sequence& q){q.remove(i);});select(i,lane());};
+   clearOvd.onClick=[this]{orbit.editSequence([](Arpeggiator::Sequence& q){q.clearOverdub();});};
+   mergeOvd.onClick=[this]{orbit.editSequence([](Arpeggiator::Sequence& q){q.mergeOverdub();});};
+   done.onClick=[this]{if(onClose)onClose();};
+  }
+  bool lane() const {return orbit.editLane.load();}
+  void open(){if(orbit.sequenceLength()==0)orbit.editSequence([](Arpeggiator::Sequence& q){q.insertAfter(-1);});orbit.editAdds.store(add.getToggleState());select(jmax(0,orbit.editStep.load()),lane());setVisible(true);toFront(false);}
+  void close(){orbit.editStep.store(-1);setVisible(false);}
+  void select(int i,bool overdubLine){orbit.editLane.store(overdubLine);orbit.editStep.store(jlimit(0,jmax(0,orbit.sequenceLength()-1),i));refresh(true);}
+  void refresh(bool force=false){if(!isVisible())return;const auto text=orbit.sequenceText();const int at=orbit.editStep.load()*2+(lane()?1:0);
+   if(force||text!=shownText||at!=shownStep){shownText=text;shownStep=at;sequence=orbit.sequenceCopy();repaint();}}
+  // 16 steps a row, each step two cells: the recorded notes (SEQ) over the overdubbed ones (OVD, blue).
+  Rectangle<int> stepArea(int i) const {const int w=(getWidth()-64)/16;return {52+(i%16)*w,40+(i/16)*66,w-4,62};}
+  Rectangle<int> laneCell(int i,bool dub) const {auto r=stepArea(i);return dub?r.withTrimmedTop(32):r.withHeight(30);}
+  void resized() override {auto row=Rectangle<int>(12,getHeight()-46,getWidth()-24,34);
+   for(auto* b:{&prev,&next,&add,&rest,&insert,&remove,&clearOvd,&mergeOvd})b->setBounds(row.removeFromLeft(118).reduced(4,0));done.setBounds(row.removeFromRight(110).reduced(4,0));}
+  void paint(Graphics& g) override {using namespace orbitui;const Colour blue(0xff6cc4ff);
+   g.setColour(Colour(0xff0b0c0d));g.fillRoundedRectangle(getLocalBounds().toFloat(),6);g.setColour(teal);g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(1),6,2);
+   g.setColour(ink);g.setFont(face(18.f,true));g.drawText("SEQUENCE EDIT",14,8,240,24,Justification::centredLeft);
+   g.setColour(dim);g.setFont(legend(13.f));
+   g.drawText("Click a SEQ or OVD cell, then play a note or chord: it "+String(add.getToggleState()?"joins":"replaces")+" that line of the step.   + adds a step.",260,8,getWidth()-280,24,Justification::centredLeft);
+   const int rows=jmin(64,sequence.length+1)/16+1;
+   for(int r=0;r<rows&&r<4;++r){g.setFont(face(11.f,true));g.setColour(ink);g.drawText("SEQ",8,40+r*66,40,30,Justification::centredLeft);g.setColour(blue);g.drawText("OVD",8,72+r*66,40,30,Justification::centredLeft);}
+   for(int i=0;i<jmin(64,sequence.length+1);++i){
+    if(i==sequence.length){const auto r=stepArea(i).toFloat();g.setColour(dim.withAlpha(.5f));g.drawRoundedRectangle(r,4,1);g.setFont(face(22.f));g.drawText("+",r,Justification::centred);continue;}
+    String played,dubbed;for(int k=0;k<sequence.count[size_t(i)];++k)(sequence.dubbed[size_t(i)][size_t(k)]?dubbed:played)<<MidiMessage::getMidiNoteName(sequence.notes[size_t(i)][size_t(k)],true,true,4)<<" ";
+    for(const bool dub:{false,true}){const auto r=laneCell(i,dub).toFloat();const bool selected=shownStep==i*2+(dub?1:0);
+     g.setColour(selected?(dub?Colour(0xff1d3a52):Colour(0xff2a4a5a)):Colour(0xff17191b));g.fillRoundedRectangle(r,4);
+     g.setColour(selected?(dub?blue:led):Colour(0xff34373a));g.drawRoundedRectangle(r,4,selected?2.f:1.f);
+     if(!dub){g.setColour(dim);g.setFont(mono(9.f));g.drawText(String(i+1).paddedLeft('0',2),r.reduced(4,2),Justification::topLeft);}
+     const auto& text=dub?dubbed:played;g.setFont(face(12.f));
+     if(text.isEmpty()){g.setColour(dim.withAlpha(.6f));g.drawText(dub?String("-"):String("REST"),r,Justification::centred);}
+     else{g.setColour(dub?blue:ink);g.drawFittedText(text.trim(),r.reduced(4,1).withTrimmedLeft(dub?0:12).toNearestInt(),Justification::centred,1,.55f);}}}
+  }
+  void mouseDown(const MouseEvent& e) override {
+   for(int i=0;i<jmin(64,sequence.length+1);++i){
+    if(i==sequence.length&&stepArea(i).contains(e.getPosition())){orbit.editSequence([](Arpeggiator::Sequence& q){q.insertAfter(q.length-1);});select(i,false);return;}
+    for(const bool dub:{false,true})if(i<sequence.length&&laneCell(i,dub).contains(e.getPosition())){select(i,dub);return;}}}
+  Orbit& orbit;TextButton prev{"<  STEP"},next{"STEP  >"},add{"ADD"},rest{"CLEAR"},insert{"INSERT"},remove{"DELETE"},clearOvd{"CLEAR OVD"},mergeOvd{"MERGE OVD"},done{"DONE"};
+  std::function<void()> onClose;Arpeggiator::Sequence sequence;String shownText;int shownStep=-2;
+ };
+ void showSequenceEditor(bool show){if(show)sequenceEditor.open();else sequenceEditor.close();}
+ SequenceEditor sequenceEditor{orbit};
+ Button* restKey=nullptr;bool restDown=false;TextButton seqMemory,seqEditKey;Button* recKey=nullptr;Label* seqStepLabel=nullptr;
  std::vector<Rectangle<float>> tagRules; OwnedArray<PanelChoice> panelChoices; OwnedArray<Label> labels; OwnedArray<Fader> faders; OwnedArray<Toggle> toggles; OwnedArray<ChoiceButtons> choices; OwnedArray<WaveKnob> waveKnobs; OwnedArray<SlideSwitch> switches; OwnedArray<ChoiceMenuButton> menuButtons; Slider* delayTimeKnob = nullptr;
  struct Sync { std::unique_ptr<SyncKey> key; std::unique_ptr<SyncKnob> knob; Slider* free = nullptr; Label* value = nullptr; const char* id = ""; bool wasSynced = true; };
  OwnedArray<Sync> syncs;

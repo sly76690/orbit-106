@@ -10,10 +10,12 @@ static juce::AudioProcessorParameter* parameterOf(juce::AudioProcessor& p,const 
 #include "CinemaBank.h"
 #include "EngineFixes.h"
 #include "Phaser.h"
+#include "Sequencer.h"
 int main() {
  juce::ScopedJuceInitialiser_GUI gui;
  if (!engineFixTests()) return 109;
  if (!phaserTests()) return 110;
+ if (!sequencerTests()) return 111;
  if (!auditRegression()) return 100;
  if (!oscillatorArchitecture()) return 101;
  if (!cinemaBankTests()) return 102;
@@ -142,7 +144,7 @@ int main() {
  std::cout<<"PASS state restore\n";
  // Host pages: the panel order for controllers such as Push, every parameter present once, short names.
  {auto* first=dynamic_cast<juce::RangedAudioParameter*>(p->getParameters()[0]);auto* ninth=dynamic_cast<juce::RangedAudioParameter*>(p->getParameters()[8]);
-  if(!first||first->paramID!="wave"||!ninth||ninth->paramID!="osc1Shape"||p->getParameters().size()!=105)return 74;
+  if(!first||first->paramID!="wave"||!ninth||ninth->paramID!="osc1Shape"||p->getParameters().size()!=109)return 74;
   for(auto* b:p->getParameters())if(b->getName(100).length()>12){std::cerr<<"Parameter name too long for a controller: "<<b->getName(100)<<"\n";return 75;}}
  std::cout<<"PASS host pages of eight with short names\n";
  p->setRateAndBufferSizeDetails(48000,256);p->prepareToPlay(48000,256);
@@ -338,7 +340,8 @@ int main() {
  };
  collectPanelIds(*editor);
  for(auto* parameter:p->getParameters())if(auto* identified=dynamic_cast<juce::AudioProcessorParameterWithID*>(parameter))
-  if(!panelIds.contains(identified->paramID)){std::cerr<<"Missing panel control: "<<identified->paramID<<"\n";return 96;}
+  if(!panelIds.contains(identified->paramID)&&identified->paramID!="seqOvd"){ // seqOvd: the REC key's second state
+   std::cerr<<"Missing panel control: "<<identified->paramID<<"\n";return 96;}
  std::cout<<"PASS all "<<panelIds.size()<<" parameters have visible panel controls\n";
  // Both range dials retain all six host values and discrete stops.
  for(const char* id:{"osc1Octave","osc2Octave"}){
