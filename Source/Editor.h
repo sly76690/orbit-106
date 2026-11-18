@@ -652,7 +652,9 @@ private:
    range.slider.setMouseDragSensitivity(140);
    compactKnob(i?"osc2Width":"vco1Width","WIDTH",{osc.getX()+355,y+15,45,68});
    if(!i)compactKnob("crossMod","X-MOD",{osc.getX()+426,y+15,65,68});
-   else{compactKnob("osc2Tune","TUNE",{osc.getX()+400,y+15,42,68});compactKnob("detune","FINE",{osc.getX()+442,y+15,42,68});
+   else{compactKnob("osc2Tune","TUNE",{osc.getX()+400,y+15,42,68});
+    {auto* tune=&faders.getLast()->slider;caption({},{osc.getX()+396,y+74,50,13},-1,11);auto* shown=labels.getLast();shown->getProperties().set("live",true); // TUNE in semitones under the knob
+     tune->onValueChange=[tune,shown]{shown->setText(tune->getTextFromValue(tune->getValue())+" st",dontSendNotification);};tune->onValueChange();}compactKnob("detune","FINE",{osc.getX()+442,y+15,42,68});
     printedToggle("oscSync","SYNC",{osc.getX()+488,y+26,27,45});printedToggle("vco2Low","LOW",{osc.getX()+518,y+26,27,45});}
   }
   auto mod=section("LFO / MODULATION",teal,{598,row2Y,334,row2H});

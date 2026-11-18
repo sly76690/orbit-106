@@ -92,17 +92,19 @@ public:
    // exponential converter). With a power curve the top half of the travel held 1.8 to 18 kHz, where little changes.
    const bool octaves=String(id)=="cutoff";
    const NormalisableRange<float> range=octaves?NormalisableRange<float>(lo,hi,[](float s,float e,float x){return s*std::pow(e/s,x);},[](float s,float e,float v){return std::log(v/s)/std::log(e/s);},nullptr)
-                                               :NormalisableRange<float>(lo,hi,0,skew);const bool centred=lo<0.f,whole=hi>=100.f,fine=lo>0.f&&lo<.06f;
+                                               :NormalisableRange<float>(lo,hi,String(id)=="osc2Tune"?1.f:0.f,skew);const bool centred=lo<0.f,whole=hi>=100.f,fine=lo>0.f&&lo<.06f;
    String unit=String(name).fromFirstOccurrenceOf("(",false,false).upToFirstOccurrenceOf(")",false,false);
    const String key(id);if(key=="arpTempo")unit="BPM";if(key=="fattack"||key=="fdecay"||key=="frelease")unit="s";if(key=="osc2Tune")unit="st";
    if(unit=="semitones")unit="st";if(unit=="octaves")unit="oct";if(unit=="cents")unit="ct";
-   auto text=[range,centred,whole,fine,unit](float v,int){
+   const bool semitones=String(id)=="osc2Tune"; // VCO 2 TUNE: whole semitones, read as +7 (a fifth)
+   auto text=[range,centred,whole,fine,unit,semitones](float v,int){
+    if(semitones){const int st=roundToInt(v);return (st>0?"+":"")+String(st);}
     const float mark=range.convertTo0to1(range.snapToLegalValue(v))*10.f-(centred?5.f:0.f);
     String shown=(centred&&mark>.04f?"+":"")+String(mark,1);
     if(unit.isNotEmpty())shown+=" ("+(whole?String(roundToInt(v)):String(v,fine&&std::abs(v)<1.f?2:1))+" "+unit+")";
     return shown;
    };
-   auto parse=[range,centred](const String& typed){return range.convertFrom0to1(jlimit(0.f,1.f,(typed.getFloatValue()+(centred?5.f:0.f))/10.f));};
+   auto parse=[range,centred,semitones](const String& typed){if(semitones)return jlimit(-12.f,12.f,float(roundToInt(typed.getFloatValue())));return range.convertFrom0to1(jlimit(0.f,1.f,(typed.getFloatValue()+(centred?5.f:0.f))/10.f));};
    keep(std::make_unique<AudioParameterFloat>(ParameterID{id,1},label(id,name),range,def,AudioParameterFloatAttributes().withStringFromValueFunction(text).withValueFromStringFunction(parse)));
   };
   add("wave","Saw / Pulse",0,1,0.35f);add("width","Pulse width",0.08f,0.92f,0.5f);add("sub","Sub level",0,1,0.7f);add("detune","VCO 2 fine (cents)",-50,50,0);
